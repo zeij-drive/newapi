@@ -1,0 +1,121 @@
+name: Build and publish Docker image (GHCR)
+
+on:
+  push:
+    branches: ['**']
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    name: Docker image (amd64 / arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Resolve image name and version
+        id: image
+        env:
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          package="${GITHUB_REPOSITORY#*/}"
+          package="${package,,}"
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            package_url="https://github.com/orgs/$owner/packages/container/$package"
+          else
+            package_url="https://github.com/users/$owner/packages/container/$package"
+          fi
+          echo "name=$image" >> "$GITHUB_OUTPUT"
+          echo "url=$package_url" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            printf '%s\n' "$GITHUB_REF_NAME" > VERSION
+          else
+            printf 'sha-%s\n' "${GITHUB_SHA:0:12}" > VERSION
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=ref,event=branch,prefix=branch-
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.title=new-api
+            org.opencontainers.image.description=new-api with channel status monitoring
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ghcr
+          cache-to: type=gha,mode=max,scope=ghcr
+          provenance: mode=max
+          sbom: true
+
+      - name: Show image links and pull commands
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          PACKAGE_URL: ${{ steps.image.outputs.url }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          {
+            echo '### Docker image'
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo 'Pull request build passed. No image was published.'
+            else
+              printf '[Open container package](%s)\n\n' "$PACKAGE_URL"
+              echo 'Platforms: `linux/amd64`, `linux/arm64`'
+              echo
+              echo '```sh'
+              while IFS= read -r tag; do
+                printf 'docker pull %s\n' "$tag"
+              done <<< "$TAGS"
+              printf 'docker pull %s@%s\n' "$IMAGE" "$DIGEST"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
