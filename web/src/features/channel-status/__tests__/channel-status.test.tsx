@@ -144,8 +144,43 @@ it('an empty summary shows the configured empty state', async () => {
     data: { success: true, data: { groups: [] } },
   })
   renderPage(1)
-  expect(await screen.findByText('No channel groups')).toBeVisible()
+  expect(await screen.findByText('No probes configured')).toBeVisible()
+  expect(
+    screen.getByText('Add a probe to monitor a channel automatically.')
+  ).toBeVisible()
 })
+
+it('group cards do not render the removed summary explanation', async () => {
+  renderPage(1)
+  expect(await screen.findByText('priority')).toBeVisible()
+  expect(
+    screen.queryByText(
+      'Availability is summarized by group. Channel details are visible only to root administrators.'
+    )
+  ).not.toBeInTheDocument()
+})
+
+it.each([1, 10, 100])(
+  'role %i renders only the monitored groups returned by the summary',
+  async (role) => {
+    vi.mocked(api.get).mockImplementation(async (url) => ({
+      data: {
+        success: true,
+        data:
+          url === '/api/channel/status/probes/'
+            ? probes
+            : { groups: [summary.groups[0]] },
+      },
+    }))
+    renderPage(role)
+    const region = await screen.findByRole('region', { name: 'Group status' })
+    expect(within(region).getByText('default')).toBeVisible()
+    expect(within(region).queryByText('priority')).not.toBeInTheDocument()
+    expect(
+      within(region).queryByText('Private channel')
+    ).not.toBeInTheDocument()
+  }
+)
 
 it('a failed summary provides a retry that loads the group status', async () => {
   vi.mocked(api.get).mockRejectedValueOnce(new Error('Status unavailable'))

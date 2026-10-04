@@ -206,14 +206,22 @@ func TestChannelStatusDatabaseMatrix(t *testing.T) {
 			for _, secret := range []string{channel.Key, channel.Name, probe.Name, probe.Model, upstream.URL, "probe_id", "channel_id", "prompt", "results", "config", "offline"} {
 				assert.NotContains(t, public.Body.String(), secret)
 			}
-			var groups struct {
+			type groupStatusResponse struct {
 				Success bool `json:"success"`
 				Data    struct {
 					Groups []channelGroupStatus `json:"groups"`
 				} `json:"data"`
 			}
+			var groups groupStatusResponse
 			require.NoError(t, common.Unmarshal(public.Body.Bytes(), &groups))
 			require.True(t, groups.Success)
+			var ordinaryGroups groupStatusResponse
+			ordinary := modelManagementRequest(t, func(c *gin.Context) {
+				c.Set("role", common.RoleCommonUser)
+				GetChannelGroupStatus(c)
+			}, http.MethodGet, "/api/channel/status/", nil, &ordinaryGroups)
+			require.Equal(t, http.StatusOK, ordinary.Code)
+			assert.Equal(t, groups, ordinaryGroups, "all roles receive the same monitored group summary")
 			found := false
 			for _, group := range groups.Data.Groups {
 				if group.Group == "default" {
@@ -230,6 +238,9 @@ func TestChannelStatusDatabaseMatrix(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, observations, "deleted probe history must be pruned")
 			assert.False(t, (channelStatusProbeHandler{}).Enabled())
+			emptyPublic := modelManagementRequest(t, GetChannelGroupStatus, http.MethodGet, "/api/channel/status/", nil, &groups)
+			require.Equal(t, http.StatusOK, emptyPublic.Code)
+			assert.Empty(t, groups.Data.Groups, "deleting the last probe removes its group from the summary")
 			verifyChannelStatusIndependentProbes(t, db, user.Id)
 		})
 	}
@@ -412,26 +423,62 @@ func verifyChannelStatusIndependentProbes(t *testing.T, db *gorm.DB, userID int)
 
 func TestChannelStatusAggregation(t *testing.T) {
 	now := time.Now().Unix()
-	probe := channelStatusProbe{ID: "healthy", ChannelID: 1, Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}
-	observations := map[string]channelStatusObservation{"healthy": {Probe: probe, Result: channelStatusProbeResult{ProbeID: "healthy", Status: channelStatusOperational, CheckedAt: now, ResponseTimeMS: 20}}}
+	healthyProbe := channelStatusProbe{ID: "healthy", ChannelID: 1, Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}
+	downProbe := healthyProbe
+	downProbe.ID, downProbe.ChannelID = "down", 2
+	unknownProbe := healthyProbe
+	unknownProbe.ID, unknownProbe.ChannelID, unknownProbe.Enabled = "unknown", 3, false
+	observations := map[string]channelStatusObservation{
+		"healthy": {Probe: healthyProbe, Result: channelStatusProbeResult{ProbeID: "healthy", Status: channelStatusOperational, CheckedAt: now, ResponseTimeMS: 20}},
+		"down":    {Probe: downProbe, Result: channelStatusProbeResult{ProbeID: "down", Status: channelStatusOutage, CheckedAt: now, ResponseTimeMS: 40}},
+	}
 	channels := []*model.Channel{
 		{Id: 1, Group: "healthy,mixed", Status: common.ChannelStatusEnabled},
 		{Id: 2, Group: "down,mixed", Status: common.ChannelStatusManuallyDisabled},
 		{Id: 3, Group: "unknown", Status: common.ChannelStatusEnabled},
+		{Id: 4, Group: "unmonitored,mixed", Status: common.ChannelStatusManuallyDisabled},
 	}
-	groups := aggregateChannelGroupStatus(channels, channelStatusProbeConfig{Probes: []channelStatusProbe{probe}}, observations, map[string]float64{"empty": 1}, now)
-	byName := map[string]channelGroupStatus{}
-	for _, group := range groups {
-		byName[group.Group] = group
+	for _, test := range []struct {
+		name     string
+		probes   []channelStatusProbe
+		expected []channelGroupStatus
+	}{
+		{
+			name:   "monitored health states",
+			probes: []channelStatusProbe{healthyProbe, downProbe, unknownProbe},
+			expected: []channelGroupStatus{
+				{Group: "down", Status: channelStatusOutage, TotalChannels: 1, LastCheckedAt: now, ResponseTimeMS: 40},
+				{Group: "healthy", Status: channelStatusOperational, TotalChannels: 1, AvailableChannels: 1, LastCheckedAt: now, ResponseTimeMS: 20},
+				{Group: "mixed", Status: channelStatusDegraded, TotalChannels: 2, AvailableChannels: 1, LastCheckedAt: now, ResponseTimeMS: 40},
+				{Group: "unknown", Status: channelStatusUnknown, TotalChannels: 1},
+			},
+		},
+		{
+			name:   "only configured channels contribute",
+			probes: []channelStatusProbe{healthyProbe},
+			expected: []channelGroupStatus{
+				{Group: "healthy", Status: channelStatusOperational, TotalChannels: 1, AvailableChannels: 1, LastCheckedAt: now, ResponseTimeMS: 20},
+				{Group: "mixed", Status: channelStatusOperational, TotalChannels: 1, AvailableChannels: 1, LastCheckedAt: now, ResponseTimeMS: 20},
+			},
+		},
+		{
+			name:     "disabled configured probe stays visible",
+			probes:   []channelStatusProbe{unknownProbe},
+			expected: []channelGroupStatus{{Group: "unknown", Status: channelStatusUnknown, TotalChannels: 1}},
+		},
+		{
+			name:     "no probes and deleted probe results show no groups",
+			expected: []channelGroupStatus{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual := aggregateChannelGroupStatus(channels, channelStatusProbeConfig{Probes: test.probes}, observations, now)
+			assert.Equal(t, test.expected, actual)
+		})
 	}
-	assert.Equal(t, channelStatusOperational, byName["healthy"].Status)
-	assert.Equal(t, channelStatusDegraded, byName["mixed"].Status)
-	assert.Equal(t, channelStatusOutage, byName["down"].Status)
-	assert.Equal(t, channelStatusUnknown, byName["unknown"].Status)
-	assert.Equal(t, channelStatusUnknown, byName["empty"].Status)
-	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(probe, observations, now+126).Status, "expired checks cannot claim current health")
-	probe.Model = "changed-target"
-	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(probe, observations, now).Status)
+	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(healthyProbe, observations, now+126).Status, "expired checks cannot claim current health")
+	healthyProbe.Model = "changed-target"
+	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(healthyProbe, observations, now).Status)
 }
 
 func TestChannelStatusRejectsInvalidProbeConfig(t *testing.T) {

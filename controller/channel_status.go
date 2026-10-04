@@ -16,7 +16,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -219,17 +218,21 @@ func GetChannelGroupStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := aggregateChannelGroupStatus(channels, config, observations, ratio_setting.GetGroupRatioCopy(), time.Now().Unix())
+	groups := aggregateChannelGroupStatus(channels, config, observations, time.Now().Unix())
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"groups": groups, "updated_at": time.Now().Unix()}})
 }
 
-func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatusProbeConfig, observations map[string]channelStatusObservation, configuredGroups map[string]float64, now int64) []channelGroupStatus {
+func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatusProbeConfig, observations map[string]channelStatusObservation, now int64) []channelGroupStatus {
 	groups := map[string]*channelGroupStatus{}
 	unknown := map[string]int{}
-	for group := range configuredGroups {
-		groups[group] = &channelGroupStatus{Group: group, Status: channelStatusUnknown}
+	monitoredChannels := make(map[int]bool, len(config.Probes))
+	for _, probe := range config.Probes {
+		monitoredChannels[probe.ChannelID] = true
 	}
 	for _, channel := range channels {
+		if !monitoredChannels[channel.Id] {
+			continue
+		}
 		status, checkedAt, latency := channelStatusUnknown, int64(0), int64(0)
 		if channel.Status != common.ChannelStatusEnabled {
 			status = channelStatusOutage

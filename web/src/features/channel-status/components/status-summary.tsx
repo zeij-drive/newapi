@@ -74,19 +74,14 @@ export function StatusSummary(props: {
   if (!props.summary?.groups.length) {
     return (
       <EmptyState
-        title={t('No channel groups')}
-        description={t('Group status appears after channels are configured.')}
+        title={t('No probes configured')}
+        description={t('Add a probe to monitor a channel automatically.')}
       />
     )
   }
 
   return (
     <section aria-label={t('Group status')} className='space-y-3'>
-      <p className='text-muted-foreground text-sm'>
-        {t(
-          'Availability is summarized by group. Channel details are visible only to root administrators.'
-        )}
-      </p>
       <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
         {props.summary.groups.map((group) => (
           <Card key={group.group} className='min-w-0'>
