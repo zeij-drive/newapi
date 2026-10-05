@@ -105,6 +105,13 @@ export function SidebarModulesCard() {
           description: t('Availability summary for configured channel groups.'),
         },
         {
+          key: 'infinite_canvas',
+          title: t('Infinite Canvas'),
+          description: t(
+            'A local workspace for arranging notes and connections.'
+          ),
+        },
+        {
           key: 'midjourney',
           title: t('Drawing Logs'),
           description: t('Drawing task records'),

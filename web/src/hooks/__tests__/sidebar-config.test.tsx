@@ -180,3 +180,28 @@ describe('audit log sidebar entry', () => {
     expect(titles).toContain('Audit Logs')
   })
 })
+
+describe('infinite canvas sidebar entry', () => {
+  it('shows Infinite Canvas by default', () => {
+    const { result } = sidebarFor()
+    expect(result.current.flatMap((group) => group.items)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Infinite Canvas',
+          url: '/infinite-canvas',
+        }),
+      ])
+    )
+  })
+
+  it('hides Infinite Canvas when an administrator disables it', () => {
+    const { result } = sidebarFor({
+      console: { enabled: true, infinite_canvas: false },
+    })
+    expect(result.current.flatMap((group) => group.items)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: '/infinite-canvas' }),
+      ])
+    )
+  })
+})

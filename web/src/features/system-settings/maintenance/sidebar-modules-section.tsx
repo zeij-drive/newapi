@@ -118,6 +118,12 @@ export function SidebarModulesSection({
         title: t('Channel status'),
         description: t('Availability summary for configured channel groups.'),
       },
+      infinite_canvas: {
+        title: t('Infinite Canvas'),
+        description: t(
+          'A local workspace for arranging notes and connections.'
+        ),
+      },
       midjourney: {
         title: t('Drawing logs'),
         description: t('History of MjProxy-style image tasks.'),

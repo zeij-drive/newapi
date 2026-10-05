@@ -72,6 +72,20 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('Console'), href: '/dashboard' })
   }
 
+  // Infinite canvas is available to every authenticated user.
+  links.push({
+    title: t('Infinite Canvas'),
+    href: '/infinite-canvas',
+    requiresAuth: !isAuthed,
+  })
+
+  // Channel status is available to every authenticated user.
+  links.push({
+    title: t('Channel status'),
+    href: '/channel-status',
+    requiresAuth: !isAuthed,
+  })
+
   // Pricing
   const pricing = modules?.pricing
   if (pricing && typeof pricing === 'object' && pricing.enabled) {

@@ -36,6 +36,7 @@ import {
   User,
   Users,
   Wallet,
+  Workflow,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -102,6 +103,11 @@ export function useSidebarData(): SidebarData {
             title: t('Channel status'),
             url: '/channel-status',
             icon: Radio,
+          },
+          {
+            title: t('Infinite Canvas'),
+            url: '/infinite-canvas',
+            icon: Workflow,
           },
           {
             title: t('Task Logs'),
