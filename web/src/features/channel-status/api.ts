@@ -28,6 +28,8 @@ export type ChannelStatusGroup = {
   total_channels: number
   last_checked_at?: number | null
   response_time_ms?: number | null
+  user_requests?: number
+  user_successes?: number
 }
 
 export type ChannelStatusSummary = {
@@ -55,6 +57,8 @@ export type ProbeResult = {
   response_time_ms?: number | null
   message?: string
   running?: boolean
+  user_requests?: number
+  user_successes?: number
 }
 
 export type ProbeChannel = {
@@ -105,7 +109,10 @@ export async function updateChannelStatusProbes(input: {
 }): Promise<ChannelStatusProbeData> {
   const response = await api.put<
     ApiEnvelope<ChannelStatusProbeData> | ChannelStatusProbeData
-  >('/api/channel/status/probes/', input)
+  >('/api/channel/status/probes/', {
+    ...input,
+    probes: input.probes.map((probe) => ({ ...probe, interval_seconds: 600 })),
+  })
   return unwrap(response.data)
 }
 

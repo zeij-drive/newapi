@@ -66,7 +66,9 @@ export function ProbeEditor(props: {
   useEffect(() => {
     if (props.open) {
       form.reset(
-        props.probe ? { ...DEFAULT_PROBE, ...props.probe } : DEFAULT_PROBE
+        props.probe
+          ? { ...DEFAULT_PROBE, ...props.probe, interval_seconds: 600 }
+          : DEFAULT_PROBE
       )
     }
   }, [form, props.open, props.probe])
@@ -170,16 +172,14 @@ export function ProbeEditor(props: {
             name='interval_seconds'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Interval (seconds)')}</FormLabel>
+                <FormLabel>{t('Probe interval')}</FormLabel>
                 <FormControl>
                   <Input
-                    type='number'
-                    min={60}
-                    max={86400}
-                    {...field}
-                    onChange={(event) =>
-                      field.onChange(Number(event.target.value))
-                    }
+                    name={field.name}
+                    ref={field.ref}
+                    onBlur={field.onBlur}
+                    value={t('Every 10 minutes')}
+                    readOnly
                   />
                 </FormControl>
                 <FormMessage />

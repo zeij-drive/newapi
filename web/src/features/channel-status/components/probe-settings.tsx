@@ -197,6 +197,7 @@ export function ProbeSettings() {
                   <TableHead>{t('Status')}</TableHead>
                   <TableHead>{t('Response time')}</TableHead>
                   <TableHead>{t('Last checked')}</TableHead>
+                  <TableHead>{t('User requests (10 min)')}</TableHead>
                   <TableHead className='text-right'>{t('Actions')}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -293,6 +294,14 @@ function ProbeRow(props: {
         {props.result?.running
           ? t('Running...')
           : formatTimestampToDate(props.result?.checked_at ?? undefined)}
+      </TableCell>
+      <TableCell>
+        <span className='whitespace-nowrap'>
+          {t('{{successes}} / {{requests}} successful', {
+            successes: formatNumber(props.result?.user_successes ?? 0, locale),
+            requests: formatNumber(props.result?.user_requests ?? 0, locale),
+          })}
+        </span>
       </TableCell>
       <TableCell>
         <div className='flex justify-end gap-1'>

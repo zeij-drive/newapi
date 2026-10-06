@@ -52,6 +52,12 @@ import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuthStore } from '@/stores/auth-store'
@@ -118,6 +124,7 @@ const NoteNode = memo(function NoteNode(props: NodeProps<CanvasNoteNode>) {
 
 const ImageNode = memo(function ImageNode(props: NodeProps<CanvasImageNode>) {
   const { t } = useTranslation()
+  const store = useContext(CanvasStoreContext)
   const userId = useContext(CanvasUserContext)
   const [source, setSource] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
@@ -150,48 +157,61 @@ const ImageNode = memo(function ImageNode(props: NodeProps<CanvasImageNode>) {
   }, [props.data.assetId, userId])
 
   return (
-    <CanvasNode
-      handles={{ target: true, source: true }}
-      className={
-        props.selected ? 'ring-primary ring-2 ring-offset-2' : undefined
-      }
-    >
-      <NodeHeader>
-        <NodeTitle className='flex items-center gap-2 text-xs tracking-wide uppercase'>
-          <ImagePlus className='size-3.5' aria-hidden='true' />
-          {t('Image')}
-        </NodeTitle>
-      </NodeHeader>
-      <NodeContent>
-        {source ? (
-          <img
-            src={source}
-            alt={props.data.name}
-            className='nodrag nopan nowheel max-h-72 max-w-72 rounded-md object-contain'
-            onError={() => {
-              setFailed(true)
-              setSource(null)
-            }}
-          />
-        ) : null}
-        {!source && failed && (
-          <ErrorState
-            title={t('Image unavailable locally')}
-            className='min-h-0 max-w-72 py-4'
-          />
-        )}
-        {!source && !failed && (
-          <LoadingState
-            message={t('Loading image...')}
-            size='sm'
-            className='min-h-0 py-4'
-          />
-        )}
-        <p className='text-muted-foreground mt-2 max-w-64 truncate text-xs'>
-          {props.data.name}
-        </p>
-      </NodeContent>
-    </CanvasNode>
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <CanvasNode
+          handles={{ target: true, source: true }}
+          className={
+            props.selected ? 'ring-primary ring-2 ring-offset-2' : undefined
+          }
+        >
+          <NodeHeader>
+            <NodeTitle className='flex items-center gap-2 text-xs tracking-wide uppercase'>
+              <ImagePlus className='size-3.5' aria-hidden='true' />
+              {t('Image')}
+            </NodeTitle>
+          </NodeHeader>
+          <NodeContent>
+            {source ? (
+              <img
+                src={source}
+                alt={props.data.name}
+                className='nodrag nopan nowheel max-h-72 max-w-72 rounded-md object-contain'
+                onError={() => {
+                  setFailed(true)
+                  setSource(null)
+                }}
+              />
+            ) : null}
+            {!source && failed && (
+              <ErrorState
+                title={t('Image unavailable locally')}
+                className='min-h-0 max-w-72 py-4'
+              />
+            )}
+            {!source && !failed && (
+              <LoadingState
+                message={t('Loading image...')}
+                size='sm'
+                className='min-h-0 py-4'
+              />
+            )}
+            <p className='text-muted-foreground mt-2 max-w-64 truncate text-xs'>
+              {props.data.name}
+            </p>
+          </NodeContent>
+        </CanvasNode>
+      </ContextMenuTrigger>
+      <ContextMenuContent className='nodrag nopan'>
+        <ContextMenuItem
+          variant='destructive'
+          onClick={() => store?.getState().removeNode(props.id)}
+        >
+          <Trash2 aria-hidden='true' />
+          {t('Delete image')}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 })
 

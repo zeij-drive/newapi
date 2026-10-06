@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -137,6 +138,7 @@ func TestChannelStatusDatabaseMatrix(t *testing.T) {
 			require.True(t, response.Success, saved.Body.String())
 			require.Len(t, response.Data.Config.Probes, 1)
 			probe = response.Data.Config.Probes[0]
+			assert.Equal(t, 600, probe.IntervalSeconds, "legacy intervals must normalize to ten minutes")
 			require.NotEmpty(t, probe.ID)
 			queued := modelManagementRequest(t, RunChannelStatusProbes, http.MethodPost, "/api/channel/status/probes/run/", nil, nil)
 			require.Equal(t, http.StatusOK, queued.Code)
@@ -275,13 +277,13 @@ func verifyChannelStatusIndependentProbes(t *testing.T, db *gorm.DB, userID int)
 	slowChannel := model.Channel{Name: "slow", Key: "slow-key", Models: "gpt-4o-mini", Group: "slow", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, BaseURL: &slow.URL}
 	require.NoError(t, db.Create(&fastChannel).Error)
 	require.NoError(t, db.Create(&slowChannel).Error)
-	fastProbe := channelStatusProbe{ID: "fast", Name: "fast", ChannelID: fastChannel.Id, Model: "gpt-4o-mini", IntervalSeconds: 60, TimeoutSeconds: 5, Enabled: true}
+	fastProbe := channelStatusProbe{ID: "fast", Name: "fast", ChannelID: fastChannel.Id, Model: "gpt-4o-mini", IntervalSeconds: 600, TimeoutSeconds: 5, Enabled: true}
 	slowProbe := fastProbe
 	slowProbe.ID, slowProbe.Name, slowProbe.ChannelID = "slow", "slow", slowChannel.Id
-	slowProbe.IntervalSeconds, slowProbe.TimeoutSeconds = 60, 10
+	slowProbe.TimeoutSeconds = 10
 	warmProbe := fastProbe
 	warmProbe.ID, warmProbe.Name = "warm", "warm"
-	probeConfig := channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{fastProbe, slowProbe, warmProbe}}
+	probeConfig := channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{slowProbe, fastProbe, warmProbe}}
 	encoded, err := common.Marshal(probeConfig)
 	require.NoError(t, err)
 	warmObservation := channelStatusObservation{Probe: warmProbe, Result: channelStatusProbeResult{ProbeID: warmProbe.ID, Status: channelStatusOperational, CheckedAt: time.Now().Unix()}}
@@ -340,6 +342,7 @@ func verifyChannelStatusIndependentProbes(t *testing.T, db *gorm.DB, userID int)
 		assert.Equal(t, result.ProbeID == slowProbe.ID, result.Running, "completed and not-yet-due probes must not inherit the active task's force flag")
 	}
 	observation := observations[fastProbe.ID]
+	observation.Result.StartedAt -= 601
 	observation.Result.CheckedAt -= int64(fastProbe.IntervalSeconds + 1)
 	require.NoError(t, persistChannelStatusObservation(observation))
 	warmObservation.Result.CheckedAt -= int64(warmProbe.IntervalSeconds + 1)
@@ -423,7 +426,7 @@ func verifyChannelStatusIndependentProbes(t *testing.T, db *gorm.DB, userID int)
 
 func TestChannelStatusAggregation(t *testing.T) {
 	now := time.Now().Unix()
-	healthyProbe := channelStatusProbe{ID: "healthy", ChannelID: 1, Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}
+	healthyProbe := channelStatusProbe{ID: "healthy", ChannelID: 1, Enabled: true, IntervalSeconds: 600, TimeoutSeconds: 5}
 	downProbe := healthyProbe
 	downProbe.ID, downProbe.ChannelID = "down", 2
 	unknownProbe := healthyProbe
@@ -472,11 +475,11 @@ func TestChannelStatusAggregation(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			actual := aggregateChannelGroupStatus(channels, channelStatusProbeConfig{Probes: test.probes}, observations, now)
+			actual := aggregateChannelGroupStatus(channels, channelStatusProbeConfig{Probes: test.probes}, observations, now, nil)
 			assert.Equal(t, test.expected, actual)
 		})
 	}
-	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(healthyProbe, observations, now+126).Status, "expired checks cannot claim current health")
+	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(healthyProbe, observations, now+1206).Status, "expired checks cannot claim current health")
 	healthyProbe.Model = "changed-target"
 	assert.Equal(t, channelStatusUnknown, channelStatusCurrentResult(healthyProbe, observations, now).Status)
 }
@@ -487,8 +490,7 @@ func TestChannelStatusRejectsInvalidProbeConfig(t *testing.T) {
 		name   string
 		change func(*channelStatusProbeConfig)
 	}{
-		{"interval too short", func(config *channelStatusProbeConfig) { config.Probes[0].IntervalSeconds = 59 }},
-		{"timeout too long", func(config *channelStatusProbeConfig) { config.Probes[0].TimeoutSeconds = 61 }},
+		{"timeout too long", func(config *channelStatusProbeConfig) { config.Probes[0].TimeoutSeconds = 301 }},
 		{"missing channel", func(config *channelStatusProbeConfig) { config.Probes[0].ChannelID = 0 }},
 		{"missing model", func(config *channelStatusProbeConfig) { config.Probes[0].Model = "" }},
 		{"long prompt", func(config *channelStatusProbeConfig) { config.Probes[0].Prompt = strings.Repeat("a", 2001) }},
@@ -499,6 +501,49 @@ func TestChannelStatusRejectsInvalidProbeConfig(t *testing.T) {
 			config := channelStatusProbeConfig{Probes: []channelStatusProbe{probe}}
 			test.change(&config)
 			require.Error(t, validateChannelStatusProbeConfig(&config, true))
+		})
+	}
+}
+
+func TestChannelStatusFixedProbeInterval(t *testing.T) {
+	now := int64(1800000000)
+	for _, interval := range []int{0, 59, 300, 600, 86400} {
+		config := channelStatusProbeConfig{Probes: []channelStatusProbe{{ID: "fixed", Name: "health", ChannelID: 1, Model: "gpt-test", IntervalSeconds: interval, TimeoutSeconds: 30, Enabled: true}}}
+		require.NoError(t, validateChannelStatusProbeConfig(&config, false))
+		probe := config.Probes[0]
+		assert.Equal(t, 600, probe.IntervalSeconds)
+		observations := map[string]channelStatusObservation{probe.ID: {Probe: probe, Result: channelStatusProbeResult{StartedAt: now, CheckedAt: now + 30}}}
+		assert.False(t, channelStatusProbeDue(probe, observations, now+599))
+		assert.True(t, channelStatusProbeDue(probe, observations, now+600), "cadence is measured from start, independent of response latency")
+	}
+}
+
+func TestChannelStatusUserTrafficContributesToMonitoredGroups(t *testing.T) {
+	now := int64(1800000000)
+	probe := channelStatusProbe{ID: "traffic", ChannelID: 1, Enabled: true, IntervalSeconds: 600, TimeoutSeconds: 30}
+	channels := []*model.Channel{{Id: 1, Group: "public", Status: common.ChannelStatusEnabled}, {Id: 2, Group: "unmonitored", Status: common.ChannelStatusEnabled}}
+	for _, test := range []struct {
+		name                string
+		probeStatus         string
+		requests, successes int64
+		want                string
+	}{
+		{"user success fills missing probe", channelStatusUnknown, 2, 2, channelStatusOperational},
+		{"mixed user traffic degrades healthy probe", channelStatusOperational, 3, 2, channelStatusDegraded},
+		{"user success and failed probe are degraded", channelStatusOutage, 2, 2, channelStatusDegraded},
+		{"failed traffic without a probe result is outage", channelStatusUnknown, 2, 0, channelStatusOutage},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			observations := map[string]channelStatusObservation{probe.ID: {Probe: probe, Result: channelStatusProbeResult{Status: test.probeStatus, CheckedAt: now - 10}}}
+			usage := map[int]perfmetrics.ChannelUsage{1: {Requests: test.requests, Successes: test.successes, LastRequestAt: now, TotalLatencyMS: test.requests * 100}, 2: {Requests: 99, Successes: 99}}
+			groups := aggregateChannelGroupStatus(channels, channelStatusProbeConfig{Probes: []channelStatusProbe{probe}}, observations, now, usage)
+			require.Len(t, groups, 1)
+			assert.Equal(t, "public", groups[0].Group)
+			assert.Equal(t, test.want, groups[0].Status)
+			assert.Equal(t, test.requests, groups[0].UserRequests)
+			assert.Equal(t, test.successes, groups[0].UserSuccesses)
+			assert.Equal(t, now, groups[0].LastCheckedAt)
+			assert.Equal(t, int64(100), groups[0].ResponseTimeMS)
 		})
 	}
 }

@@ -96,6 +96,7 @@ func RecordTaskResult(task *model.Task, result *relaycommon.TaskInfo) {
 			sample.GenerationMs = (endTs - genStart) * 1000
 		}
 	}
+	recordChannelUsage(task.ChannelId, sample.Success, sample.LatencyMs, time.Unix(endTs, 0))
 	Record(sample)
 }
 

@@ -36,9 +36,10 @@ export function probeFormSchema(t: TFunction) {
         .max(200, t('Model must be at most 200 characters')),
       interval_seconds: z
         .number()
-        .int()
-        .min(60, t('Interval must be between 60 and 86400 seconds'))
-        .max(86400, t('Interval must be between 60 and 86400 seconds')),
+        .refine(
+          (interval): boolean => interval === 600,
+          t('Probe interval is fixed at 10 minutes')
+        ),
       timeout_seconds: z
         .number()
         .int()
@@ -63,7 +64,7 @@ export const DEFAULT_PROBE: ProbeFormValues = {
   model: '',
   endpoint_type: '',
   is_stream: false,
-  interval_seconds: 300,
+  interval_seconds: 600,
   timeout_seconds: 30,
   prompt: '',
   enabled: true,

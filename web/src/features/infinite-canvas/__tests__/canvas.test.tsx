@@ -16,7 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   createElement,
@@ -270,6 +277,39 @@ it('shows a selected image and restores its asset when reopening the canvas', as
 
   expect(await screen.findByRole('img', { name: 'diagram.png' })).toBeVisible()
   expect(loadCanvasImage).toHaveBeenCalledWith(1, expect.any(String))
+})
+
+it('deletes only the right-clicked image and its local asset while keeping other canvas items', async () => {
+  const first = renderCanvas()
+  await addNote('Keep note', 'Keep content')
+  await selectImage()
+  const image = await screen.findByRole('img', { name: 'diagram.png' })
+  const user = userEvent.setup()
+  await user.upload(
+    screen.getByLabelText('Add image'),
+    new File(['second'], 'other.png', { type: 'image/png' })
+  )
+  await screen.findByRole('img', { name: 'other.png' })
+
+  fireEvent.contextMenu(image, { clientX: 200, clientY: 200, button: 2 })
+  await user.click(
+    await screen.findByRole('menuitem', { name: 'Delete image' })
+  )
+
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('img', { name: 'diagram.png' })
+    ).not.toBeInTheDocument()
+  )
+  await waitFor(() => expect(imageAssets.remove).toHaveBeenCalledTimes(1))
+  expect(screen.getByRole('img', { name: 'other.png' })).toBeVisible()
+  expect(screen.getByDisplayValue('Keep note')).toBeVisible()
+  first.unmount()
+  renderCanvas()
+  expect(await screen.findByRole('img', { name: 'other.png' })).toBeVisible()
+  expect(
+    screen.queryByRole('img', { name: 'diagram.png' })
+  ).not.toBeInTheDocument()
 })
 
 it('shows an unavailable image placeholder when its local asset is missing', async () => {

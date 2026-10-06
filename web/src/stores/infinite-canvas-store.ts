@@ -59,6 +59,7 @@ export type CanvasStore = InfiniteCanvasState & {
     data: Partial<CanvasNoteNode['data']>
   ) => void
   onNodesChange: (changes: NodeChange<CanvasNode>[]) => void
+  removeNode: (nodeId: string) => void
   onEdgesChange: (changes: EdgeChange[]) => void
   connect: (connection: Connection) => void
   setViewport: (viewport: Viewport) => void
@@ -223,6 +224,8 @@ export function createInfiniteCanvasStore(userId: number) {
           assetsSaved = assetsSaved && pendingCleanupAssets.size === 0
         })
       },
+      removeNode: (nodeId) =>
+        get().onNodesChange([{ type: 'remove', id: nodeId }]),
       onEdgesChange: (changes) =>
         update((state) => ({
           ...state,

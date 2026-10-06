@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,7 @@ const (
 	channelStatusDegraded      = "degraded"
 	channelStatusOutage        = "outage"
 	channelStatusUnknown       = "unknown"
+	channelStatusProbeInterval = 600
 )
 
 type channelStatusProbe struct {
@@ -50,9 +52,12 @@ type channelStatusProbeResult struct {
 	ProbeID        string `json:"probe_id"`
 	Status         string `json:"status"`
 	CheckedAt      int64  `json:"checked_at"`
+	StartedAt      int64  `json:"started_at"`
 	ResponseTimeMS int64  `json:"response_time_ms"`
 	Message        string `json:"message"`
 	Running        bool   `json:"running"`
+	UserRequests   int64  `json:"user_requests"`
+	UserSuccesses  int64  `json:"user_successes"`
 }
 
 // Store the exact configuration with a result: editing a target, model or
@@ -70,6 +75,8 @@ type channelGroupStatus struct {
 	TotalChannels     int    `json:"total_channels"`
 	LastCheckedAt     int64  `json:"last_checked_at"`
 	ResponseTimeMS    int64  `json:"response_time_ms"`
+	UserRequests      int64  `json:"-"`
+	UserSuccesses     int64  `json:"-"`
 }
 
 type channelStatusProbeTarget struct {
@@ -147,6 +154,10 @@ func readChannelStatusState() (channelStatusProbeConfig, map[string]channelStatu
 	if observations == nil {
 		observations = map[string]channelStatusObservation{}
 	}
+	for id, observation := range observations {
+		observation.Probe.IntervalSeconds = channelStatusProbeInterval
+		observations[id] = observation
+	}
 	return config, observations, nil
 }
 
@@ -177,8 +188,9 @@ func validateChannelStatusProbeConfig(config *channelStatusProbeConfig, assignID
 		if utf8.RuneCountInString(probe.Prompt) > 2000 {
 			return errors.New("探针提示词最多 2000 个字符")
 		}
-		if probe.IntervalSeconds < 60 || probe.IntervalSeconds > 86400 || probe.TimeoutSeconds < 5 || probe.TimeoutSeconds > 300 || probe.TimeoutSeconds > probe.IntervalSeconds {
-			return errors.New("检测间隔应为 60 至 86400 秒，超时应为 5 至 300 秒且不超过检测间隔")
+		probe.IntervalSeconds = channelStatusProbeInterval
+		if probe.TimeoutSeconds < 5 || probe.TimeoutSeconds > 300 {
+			return errors.New("探针每 10 分钟检测一次，超时应为 5 至 300 秒")
 		}
 		if probe.EndpointType != "" {
 			switch constant.EndpointType(probe.EndpointType) {
@@ -201,10 +213,22 @@ func channelStatusCurrentResult(probe channelStatusProbe, observations map[strin
 	}
 	result = observation.Result
 	result.Running = false
-	if now-result.CheckedAt > int64(probe.IntervalSeconds*2+probe.TimeoutSeconds) || !probe.Enabled {
+	if now-result.CheckedAt > int64(channelStatusProbeInterval*2+probe.TimeoutSeconds) || !probe.Enabled {
 		result.Status = channelStatusUnknown
 	}
 	return result
+}
+
+func channelStatusProbeDue(probe channelStatusProbe, observations map[string]channelStatusObservation, now int64) bool {
+	observation, exists := observations[probe.ID]
+	if !exists || observation.Probe != probe {
+		return true
+	}
+	startedAt := observation.Result.StartedAt
+	if startedAt == 0 {
+		startedAt = observation.Result.CheckedAt
+	}
+	return now-startedAt >= channelStatusProbeInterval
 }
 
 func GetChannelGroupStatus(c *gin.Context) {
@@ -218,13 +242,20 @@ func GetChannelGroupStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := aggregateChannelGroupStatus(channels, config, observations, time.Now().Unix())
+	channelIDs := make([]int, 0, len(config.Probes))
+	for _, probe := range config.Probes {
+		channelIDs = append(channelIDs, probe.ChannelID)
+	}
+	now := time.Now()
+	usage := perfmetrics.RecentChannelUsage(channelIDs, now)
+	groups := aggregateChannelGroupStatus(channels, config, observations, now.Unix(), usage)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"groups": groups, "updated_at": time.Now().Unix()}})
 }
 
-func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatusProbeConfig, observations map[string]channelStatusObservation, now int64) []channelGroupStatus {
+func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatusProbeConfig, observations map[string]channelStatusObservation, now int64, usage map[int]perfmetrics.ChannelUsage) []channelGroupStatus {
 	groups := map[string]*channelGroupStatus{}
 	unknown := map[string]int{}
+	degraded := map[string]int{}
 	monitoredChannels := make(map[int]bool, len(config.Probes))
 	for _, probe := range config.Probes {
 		monitoredChannels[probe.ChannelID] = true
@@ -234,6 +265,8 @@ func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatus
 			continue
 		}
 		status, checkedAt, latency := channelStatusUnknown, int64(0), int64(0)
+		successfulChecks, failedChecks, missingChecks := int64(0), int64(0), false
+		traffic := usage[channel.Id]
 		if channel.Status != common.ChannelStatusEnabled {
 			status = channelStatusOutage
 		}
@@ -247,19 +280,29 @@ func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatus
 			if channel.Status != common.ChannelStatusEnabled {
 				continue
 			}
-			if result.Status == channelStatusOutage {
-				status = channelStatusOutage
-				continue
+			switch result.Status {
+			case channelStatusOperational:
+				successfulChecks++
+			case channelStatusOutage:
+				failedChecks++
+			default:
+				missingChecks = true
 			}
-			if status == channelStatusOutage {
-				continue
+		}
+		if channel.Status == common.ChannelStatusEnabled {
+			successfulChecks += traffic.Successes
+			failedChecks += traffic.Requests - traffic.Successes
+			checkedAt = max(checkedAt, traffic.LastRequestAt)
+			if traffic.Requests > 0 {
+				latency = max(latency, traffic.TotalLatencyMS/traffic.Requests)
 			}
-			if result.Status == channelStatusUnknown {
+			switch {
+			case successfulChecks > 0 && (failedChecks > 0 || missingChecks && traffic.Requests == 0):
 				status = channelStatusDegraded
-				continue
-			}
-			if status != channelStatusDegraded {
+			case successfulChecks > 0:
 				status = channelStatusOperational
+			case failedChecks > 0:
+				status = channelStatusOutage
 			}
 		}
 		for _, group := range channel.GetGroups() {
@@ -274,11 +317,16 @@ func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatus
 			entry.TotalChannels++
 			entry.LastCheckedAt = max(entry.LastCheckedAt, checkedAt)
 			entry.ResponseTimeMS = max(entry.ResponseTimeMS, latency)
+			entry.UserRequests += traffic.Requests
+			entry.UserSuccesses += traffic.Successes
 			if status == channelStatusOperational {
 				entry.AvailableChannels++
 			}
-			if status == channelStatusUnknown || status == channelStatusDegraded {
+			if status == channelStatusUnknown {
 				unknown[group]++
+			}
+			if status == channelStatusDegraded {
+				degraded[group]++
 			}
 		}
 	}
@@ -293,9 +341,9 @@ func aggregateChannelGroupStatus(channels []*model.Channel, config channelStatus
 		switch {
 		case entry.TotalChannels == 0, unknown[group] == entry.TotalChannels:
 			entry.Status = channelStatusUnknown
-		case entry.AvailableChannels == entry.TotalChannels:
+		case entry.AvailableChannels == entry.TotalChannels && degraded[group] == 0:
 			entry.Status = channelStatusOperational
-		case entry.AvailableChannels > 0:
+		case entry.AvailableChannels > 0 || degraded[group] > 0:
 			entry.Status = channelStatusDegraded
 		case unknown[group] > 0:
 			entry.Status = channelStatusUnknown
@@ -327,6 +375,11 @@ func GetChannelStatusProbes(c *gin.Context) {
 		targets = append(targets, channelStatusProbeTarget{ID: channel.Id, Name: channel.Name, Models: channel.GetModels(), Group: channel.Group})
 	}
 	results := make([]channelStatusProbeResult, 0, len(config.Probes))
+	channelIDs := make([]int, 0, len(config.Probes))
+	for _, probe := range config.Probes {
+		channelIDs = append(channelIDs, probe.ChannelID)
+	}
+	usage := perfmetrics.RecentChannelUsage(channelIDs, time.Now())
 	active, err := model.GetActiveSystemTask(model.SystemTaskTypeChannelStatusProbe)
 	if err != nil {
 		common.ApiError(c, err)
@@ -338,6 +391,8 @@ func GetChannelStatusProbes(c *gin.Context) {
 	}
 	for _, probe := range config.Probes {
 		result := channelStatusCurrentResult(probe, observations, time.Now().Unix())
+		result.UserRequests = usage[probe.ChannelID].Requests
+		result.UserSuccesses = usage[probe.ChannelID].Successes
 		// Running is a transient scheduler state. A persisted observation can
 		// remain marked while a worker is interrupted, so never expose that bit
 		// unless an active system task still owns the probe run.
@@ -345,7 +400,7 @@ func GetChannelStatusProbes(c *gin.Context) {
 		if active != nil && probe.Enabled && (payload.ProbeID == "" || payload.ProbeID == probe.ID) {
 			observation, exists := observations[probe.ID]
 			if active.Status == model.SystemTaskStatusPending {
-				result.Running = payload.Force || !exists || observation.Probe != probe || time.Now().Unix()-observation.Result.CheckedAt >= int64(probe.IntervalSeconds)
+				result.Running = payload.Force || channelStatusProbeDue(probe, observations, time.Now().Unix())
 			} else {
 				result.Running = exists && observation.Probe == probe && observation.TaskID == active.TaskID && observation.Result.Running
 			}
@@ -460,8 +515,7 @@ func (channelStatusProbeHandler) Enabled() bool {
 		return false
 	}
 	for _, probe := range config.Probes {
-		observation, exists := observations[probe.ID]
-		if probe.Enabled && (!exists || observation.Probe != probe || time.Now().Unix()-observation.Result.CheckedAt >= int64(probe.IntervalSeconds)) {
+		if probe.Enabled && channelStatusProbeDue(probe, observations, time.Now().Unix()) {
 			return true
 		}
 	}
@@ -493,6 +547,18 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 	if !payload.Force && !config.Enabled {
 		return []channelStatusProbeResult{}, nil
 	}
+	if !payload.Force {
+		due := false
+		for _, probe := range config.Probes {
+			if probe.Enabled && channelStatusProbeDue(probe, observations, time.Now().Unix()) {
+				due = true
+				break
+			}
+		}
+		if !due {
+			return []channelStatusProbeResult{}, nil
+		}
+	}
 	testUserID, err := resolveChannelTestUserID(nil)
 	if err != nil {
 		return nil, err
@@ -502,8 +568,7 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 		if !probe.Enabled || payload.ProbeID != "" && payload.ProbeID != probe.ID {
 			continue
 		}
-		observation, exists := observations[probe.ID]
-		if !payload.Force && exists && observation.Probe == probe && time.Now().Unix()-observation.Result.CheckedAt < int64(probe.IntervalSeconds) {
+		if !payload.Force && !channelStatusProbeDue(probe, observations, time.Now().Unix()) {
 			continue
 		}
 		selected = append(selected, probe)
@@ -516,24 +581,34 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 	initialPending := map[string]bool{}
 	selectedIDs := map[string]bool{}
 	latestResults := map[string]channelStatusProbeResult{}
-	startProbe := func(probe channelStatusProbe) error {
-		observation := channelStatusObservation{Probe: probe, Result: channelStatusCurrentResult(probe, observations, time.Now().Unix()), TaskID: taskID}
-		observation.Result.Running = true
-		if err := persistChannelStatusObservation(observation); err != nil {
+	startProbes := func(probes []channelStatusProbe) error {
+		if len(probes) == 0 {
+			return nil
+		}
+		updates := make([]channelStatusObservation, 0, len(probes))
+		for _, probe := range probes {
+			observation := channelStatusObservation{Probe: probe, Result: channelStatusCurrentResult(probe, observations, time.Now().Unix()), TaskID: taskID}
+			observation.Result.StartedAt = time.Now().Unix()
+			observation.Result.Running = true
+			updates = append(updates, observation)
+		}
+		if err := persistChannelStatusObservation(updates...); err != nil {
 			return err
 		}
-		running[probe.ID] = true
-		workers.Go(func() {
-			result := executeChannelStatusProbe(runCtx, probe, testUserID)
-			completed <- channelStatusObservation{Probe: probe, Result: result, TaskID: taskID}
-		})
+		for _, probe := range probes {
+			running[probe.ID] = true
+			workers.Go(func() {
+				result := executeChannelStatusProbe(runCtx, probe, testUserID)
+				completed <- channelStatusObservation{Probe: probe, Result: result, TaskID: taskID}
+			})
+		}
 		return nil
 	}
 	for _, probe := range selected {
 		initialPending[probe.ID], selectedIDs[probe.ID] = true, true
-		if err := startProbe(probe); err != nil {
-			return nil, err
-		}
+	}
+	if err := startProbes(selected); err != nil {
+		return nil, err
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -550,9 +625,6 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 			observations[observation.Probe.ID] = observation
 			latestResults[observation.Probe.ID] = observation.Result
 		case <-ticker.C:
-			// A slow probe must not delay the next due check of a completed one.
-			// Stop adding cycles after the initial set completes, then drain any
-			// already started checks before releasing the system task lease.
 			if len(initialPending) == 0 {
 				continue
 			}
@@ -564,21 +636,19 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 				continue
 			}
 			observations = currentObservations
+			due := make([]channelStatusProbe, 0, len(currentConfig.Probes))
 			for _, probe := range currentConfig.Probes {
-				if !probe.Enabled || running[probe.ID] || payload.ProbeID != "" && payload.ProbeID != probe.ID {
+				if !probe.Enabled || running[probe.ID] || payload.ProbeID != "" && payload.ProbeID != probe.ID || !channelStatusProbeDue(probe, observations, time.Now().Unix()) {
 					continue
 				}
-				observation, exists := observations[probe.ID]
-				if exists && observation.Probe == probe && time.Now().Unix()-observation.Result.CheckedAt < int64(probe.IntervalSeconds) {
-					continue
-				}
-				if err := startProbe(probe); err != nil {
-					return nil, err
-				}
+				due = append(due, probe)
 				if !selectedIDs[probe.ID] {
 					selected = append(selected, probe)
 					selectedIDs[probe.ID] = true
 				}
+			}
+			if err := startProbes(due); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -591,14 +661,16 @@ func runChannelStatusProbeTask(ctx context.Context, payload channelStatusProbeTa
 	return results, nil
 }
 
-func persistChannelStatusObservation(observation channelStatusObservation) error {
+func persistChannelStatusObservation(updates ...channelStatusObservation) error {
 	channelStatusResultsMu.Lock()
 	defer channelStatusResultsMu.Unlock()
 	config, observations, err := readChannelStatusState()
 	if err != nil {
 		return err
 	}
-	observations[observation.Probe.ID] = observation
+	for _, observation := range updates {
+		observations[observation.Probe.ID] = observation
+	}
 	retained := map[string]channelStatusObservation{}
 	for _, probe := range config.Probes {
 		if existing, ok := observations[probe.ID]; ok && existing.Probe == probe {
@@ -614,7 +686,7 @@ func persistChannelStatusObservation(observation channelStatusObservation) error
 
 func executeChannelStatusProbe(parent context.Context, probe channelStatusProbe, userID int) (result channelStatusProbeResult) {
 	start := time.Now()
-	result = channelStatusProbeResult{ProbeID: probe.ID, Status: channelStatusOutage}
+	result = channelStatusProbeResult{ProbeID: probe.ID, Status: channelStatusOutage, StartedAt: start.Unix()}
 	defer func() {
 		result.CheckedAt = time.Now().Unix()
 		result.ResponseTimeMS = time.Since(start).Milliseconds()

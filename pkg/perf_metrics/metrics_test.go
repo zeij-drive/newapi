@@ -12,6 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +93,60 @@ func TestClientCancellationDuringUpstreamRead(t *testing.T) {
 	deadline := relaycommon.NewStreamStatus()
 	deadline.SetEndReason(relaycommon.StreamEndReasonClientGone, context.DeadlineExceeded)
 	assert.Equal(t, OutcomeFailure, ClassifyRelayOutcome(context.Background(), &relaycommon.RelayInfo{StreamStatus: deadline}, nil))
+}
+
+func TestChannelUsageTracksRealResultsAndExpires(t *testing.T) {
+	for _, redisEnabled := range []bool{false, true} {
+		name := "memory"
+		if redisEnabled {
+			name = "redis"
+		}
+		t.Run(name, func(t *testing.T) {
+			oldRedis, oldClient := common.RedisEnabled, common.RDB
+			oldBuckets, oldPrunedAt := channelUsageBuckets, channelUsagePrunedAt
+			channelUsageBuckets, channelUsagePrunedAt = map[channelUsageKey]ChannelUsage{}, 0
+			common.RedisEnabled = redisEnabled
+			if redisEnabled {
+				server := miniredis.RunT(t)
+				client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+				common.RDB = client
+				t.Cleanup(func() { require.NoError(t, client.Close()) })
+			}
+			t.Cleanup(func() {
+				common.RedisEnabled, common.RDB = oldRedis, oldClient
+				channelUsageBuckets, channelUsagePrunedAt = oldBuckets, oldPrunedAt
+			})
+			now := time.Now()
+			info := &relaycommon.RelayInfo{}
+			RecordChannelResult(context.Background(), 7, info, nil, now)
+			RecordChannelResult(context.Background(), 7, info, types.InitOpenAIError("server_error", 503), now)
+			RecordChannelResult(context.Background(), 7, &relaycommon.RelayInfo{IsChannelTest: true}, nil, now)
+			RecordChannelResult(context.Background(), 7, &relaycommon.RelayInfo{PerformanceBusinessRejection: true}, nil, now)
+			RecordChannelResult(context.Background(), 7, info, types.InitOpenAIError("context_length_exceeded", 400), now)
+			canceled, cancel := context.WithCancel(context.Background())
+			cancel()
+			RecordChannelResult(canceled, 7, info, nil, now)
+			RecordTaskResult(&model.Task{ChannelId: 8, Status: model.TaskStatusSuccess, SubmitTime: now.Unix() - 30, FinishTime: now.Unix()}, nil)
+			if redisEnabled {
+				require.Eventually(t, func() bool {
+					usage := RecentChannelUsage([]int{7, 8}, time.Now())
+					return usage[7].Requests == 2 && usage[8].Requests == 1
+				}, time.Second, time.Millisecond)
+				// A different node has no local samples but reads the same counters.
+				channelUsageMu.Lock()
+				clear(channelUsageBuckets)
+				channelUsageMu.Unlock()
+			}
+			usage := RecentChannelUsage([]int{7}, time.Now())
+			require.Len(t, usage, 1)
+			assert.Equal(t, int64(2), usage[7].Requests)
+			assert.Equal(t, int64(1), usage[7].Successes)
+			assert.Positive(t, usage[7].LastRequestAt)
+			assert.NotContains(t, usage, 8, "unmonitored channels cannot leak into the status")
+			expired := RecentChannelUsage([]int{7}, now.Add(11*time.Minute))
+			assert.Zero(t, expired[7].Requests)
+		})
+	}
 }
 
 func TestPerformanceWindowIncludesCurrentHour(t *testing.T) {

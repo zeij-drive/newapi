@@ -70,6 +70,8 @@ const probes: ChannelStatusProbeData = {
       checked_at: 1000,
       response_time_ms: 50,
       message: 'Upstream unavailable',
+      user_requests: 25,
+      user_successes: 23,
     },
   ],
   channels: [
@@ -128,6 +130,7 @@ it('root sees probe controls and results without exposing them after a role chan
   expect(await screen.findByRole('button', { name: 'Add probe' })).toBeVisible()
   expect(screen.getByText('Private channel')).toBeVisible()
   expect(screen.getByText('Upstream unavailable')).toBeVisible()
+  expect(screen.getByText('23 / 25 successful')).toBeVisible()
   await act(() =>
     useAuthStore
       .getState()
@@ -257,12 +260,12 @@ it('saving a new probe submits its settings and displays the saved probe', async
   expect(api.put).toHaveBeenCalledWith('/api/channel/status/probes/', {
     enabled: true,
     probes: [
-      probes.config.probes[0],
+      { ...probes.config.probes[0], interval_seconds: 600 },
       expect.objectContaining({
         name: 'Backup probe',
         channel_id: 7,
         model: 'gpt-test',
-        interval_seconds: 300,
+        interval_seconds: 600,
         timeout_seconds: 30,
         enabled: true,
       }),
@@ -287,29 +290,32 @@ it('a manual probe run queues the selected probe through its dedicated endpoint'
   )
 })
 
-it('an invalid interval shows its field error and prevents a save request', async () => {
-  vi.spyOn(api, 'put')
+it('editing a legacy probe fixes its interval to ten minutes and submits 600 seconds', async () => {
+  vi.spyOn(api, 'put').mockResolvedValue({
+    data: { success: true, data: probes },
+  })
   renderPage(100)
   await userEvent.click(
     await screen.findByRole('button', { name: 'Edit probe' })
   )
   const dialog = await screen.findByRole('dialog')
-  const interval = within(dialog).getByRole('spinbutton', {
-    name: 'Interval (seconds)',
+  const interval = within(dialog).getByRole('textbox', {
+    name: 'Probe interval',
   })
-  await userEvent.clear(interval)
-  await userEvent.type(interval, '30')
-  // Submit directly so the test also exercises validation without browser range constraints.
-  const form = within(dialog)
-    .getByRole('button', { name: 'Save probe' })
-    .getAttribute('form')
-  const event = new Event('submit', { bubbles: true, cancelable: true })
-  await act(() =>
-    document.querySelector(`form[id="${form ?? ''}"]`)?.dispatchEvent(event)
+  expect(interval).toHaveAttribute('readonly')
+  expect(interval).toHaveValue('Every 10 minutes')
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: 'Save probe' })
   )
-  expect(
-    await screen.findByText('Interval must be between 60 and 86400 seconds')
-  ).toBeVisible()
-  expect(interval).toHaveAttribute('aria-invalid', 'true')
-  expect(api.put).not.toHaveBeenCalled()
+  await waitFor(() =>
+    expect(api.put).toHaveBeenCalledWith('/api/channel/status/probes/', {
+      enabled: true,
+      probes: [
+        expect.objectContaining({
+          ...probes.config.probes[0],
+          interval_seconds: 600,
+        }),
+      ],
+    })
+  )
 })
