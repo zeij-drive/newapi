@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -147,6 +148,71 @@ func TestChannelUsageTracksRealResultsAndExpires(t *testing.T) {
 			assert.Zero(t, expired[7].Requests)
 		})
 	}
+}
+
+func TestRecentChannelUsageKeepsLocalSamplesBeforeRedisSync(t *testing.T) {
+	oldRedis, oldClient := common.RedisEnabled, common.RDB
+	oldBuckets, oldPrunedAt := channelUsageBuckets, channelUsagePrunedAt
+	channelUsageBuckets, channelUsagePrunedAt = map[channelUsageKey]ChannelUsage{}, 0
+	t.Cleanup(func() {
+		common.RedisEnabled, common.RDB = oldRedis, oldClient
+		channelUsageBuckets, channelUsagePrunedAt = oldBuckets, oldPrunedAt
+	})
+
+	server := miniredis.RunT(t)
+	common.RedisEnabled = true
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { require.NoError(t, common.RDB.Close()) })
+
+	now := time.Now()
+	minute := now.Unix() - now.Unix()%60
+	channelUsageBuckets[channelUsageKey{channelID: 7, minute: minute}] = ChannelUsage{
+		Requests:       1,
+		Successes:      1,
+		TotalLatencyMS: 125,
+		LastRequestAt:  now.Unix(),
+	}
+
+	usage := RecentChannelUsage([]int{7}, now)
+	require.Equal(t, int64(1), usage[7].Requests)
+	assert.Equal(t, int64(1), usage[7].Successes)
+	assert.Equal(t, int64(125), usage[7].TotalLatencyMS)
+}
+
+func TestRecentChannelUsageKeepsLocalSuccessAheadOfStaleRedis(t *testing.T) {
+	oldRedis, oldClient := common.RedisEnabled, common.RDB
+	oldBuckets, oldPrunedAt := channelUsageBuckets, channelUsagePrunedAt
+	channelUsageBuckets, channelUsagePrunedAt = map[channelUsageKey]ChannelUsage{}, 0
+	t.Cleanup(func() {
+		common.RedisEnabled, common.RDB = oldRedis, oldClient
+		channelUsageBuckets, channelUsagePrunedAt = oldBuckets, oldPrunedAt
+	})
+
+	server := miniredis.RunT(t)
+	common.RedisEnabled = true
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { require.NoError(t, common.RDB.Close()) })
+
+	now := time.Now()
+	minute := now.Unix() - now.Unix()%60
+	key := "channel-status:usage:7:" + strconv.FormatInt(minute, 10)
+	require.NoError(t, common.RDB.HSet(context.Background(), key,
+		"requests", 1,
+		"successes", 0,
+		"latency", 100,
+		"last", now.Unix(),
+	).Err())
+	channelUsageBuckets[channelUsageKey{channelID: 7, minute: minute}] = ChannelUsage{
+		Requests:       1,
+		Successes:      1,
+		TotalLatencyMS: 125,
+		LastRequestAt:  now.Unix(),
+	}
+
+	usage := RecentChannelUsage([]int{7}, now)
+	require.Equal(t, int64(1), usage[7].Requests)
+	assert.Equal(t, int64(1), usage[7].Successes)
+	assert.Equal(t, int64(125), usage[7].TotalLatencyMS)
 }
 
 func TestPerformanceWindowIncludesCurrentHour(t *testing.T) {

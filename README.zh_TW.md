@@ -6,6 +6,8 @@
 
 **連接模型、應用程式與 Agent 的 AI 閘道**
 
+<p align="center"><strong>由 StarryBest.COM 開發</strong></p>
+
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
   <strong>繁體中文</strong> |
@@ -43,6 +45,7 @@
 </p>
 
 <p align="center">
+  <a href="#feature-updates">本次更新</a> •
   <a href="#capabilities">核心能力</a> •
   <a href="#quick-start">快速開始</a> •
   <a href="#deployment">部署維運</a> •
@@ -59,6 +62,29 @@
 New API 是面向應用程式、Agent 和團隊的自託管 AI 閘道。將不同供應商的模型服務接入統一入口，在同一套控制台中管理渠道、存取權限、用量與成本。
 
 你可以用它為團隊分配已授權的模型資源，在切換上游時減少用戶端改動，或建置自己的多模型服務。支援接入 OpenAI、Anthropic、Google Gemini、Azure OpenAI、AWS Bedrock、Vertex AI、DeepSeek、通義千問及其他相容服務。
+
+<a id="feature-updates"></a>
+
+## 本次功能更新與使用方法
+
+### 渠道狀態
+
+- 頂部導覽和側邊欄均已加入「渠道狀態」。一般使用者只能看到已設定探針渠道的群組彙總，只有最高管理員可以查看渠道和探針詳情。
+- 最高管理員進入「渠道狀態 → 探針設定」，選擇渠道、模型，填寫提示詞和逾時時間並啟用探針。探針週期固定為 10 分鐘，啟用的探針可以一起執行，也會由排程器自動執行。
+- 每個群組會結合探針結果與最近 10 分鐘的真實使用者請求，顯示請求數、成功數和回應延遲。探針請求、用戶端取消的請求和業務拒絕不會計入使用者統計。
+- 渠道狀態支援 SQLite、MySQL 和 PostgreSQL。
+
+### 無限畫布
+
+- 頂部導覽和側邊欄均已加入「無限畫布」，支援便箋、上傳圖片、連線和生圖。
+- 畫布資料和上傳的圖片資源只儲存在目前使用者的瀏覽器（Local Storage 和 IndexedDB）中，不會上傳到應用程式伺服器。右鍵圖片並選擇「刪除」，即可只刪除該圖片及其本機資源。
+- 生圖時開啟「無限畫布 → 生圖設定」，填寫 OpenAI 相容介面位址和模型；生成時輸入 API Key。API Key 只保存在記憶體中，離開頁面後會清除。
+
+### Docker 映像自動化
+
+- `.github/workflows/docker-ghcr.yml` 會在分支或標籤推送、手動執行時建置 `linux/amd64` 和 `linux/arm64` 映像，並發布到 `ghcr.io/<擁有者>/<儲存庫>`。
+- `.github/workflows/docker-build.yml` 用於發布標籤或手動指定標籤，向 Docker Hub 的 `calciumion/new-api` 發布多架構映像；`.github/workflows/docker-image-branch.yml` 支援手動建置指定分支。
+- 工作流程成功後開啟 GitHub Actions 的「Summary」，即可查看映像套件連結、標籤和 `docker pull` 指令。依摘要中的標籤拉取，例如 `docker pull ghcr.io/<擁有者>/<儲存庫>:latest` 或 `docker pull calciumion/new-api:<標籤>`。
 
 > [!IMPORTANT]
 > - 本專案僅面向合法授權的 AI API 閘道、組織內部鑑權、多模型管理、用量統計、成本核算和私有化部署場景。

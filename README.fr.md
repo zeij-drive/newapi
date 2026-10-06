@@ -6,6 +6,8 @@
 
 **Une passerelle IA pour les modèles, les applications et les agents**
 
+<p align="center"><strong>Développé par StarryBest.COM</strong></p>
+
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
   <a href="./README.zh_TW.md">繁體中文</a> |
@@ -44,6 +46,7 @@
 </p>
 
 <p align="center">
+  <a href="#feature-updates">Nouveautés</a> •
   <a href="#capabilities">Fonctionnalités</a> •
   <a href="#quick-start">Démarrage rapide</a> •
   <a href="#deployment">Déploiement</a> •
@@ -60,6 +63,29 @@
 New API est une passerelle IA auto-hébergée pour les applications, les agents et les équipes. Connectez vos fournisseurs de modèles, exposez une API commune à vos clients et gérez le routage, les accès, les usages et les coûts depuis une même console.
 
 Utilisez-la pour partager des accès autorisés au sein d'une équipe, changer de fournisseur sans reconfigurer chaque client ou exploiter un service privé multi-modèles. Les fournisseurs incluent OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, Vertex AI, DeepSeek, Qwen et d'autres services compatibles.
+
+<a id="feature-updates"></a>
+
+## Nouveautés et utilisation
+
+### État des canaux
+
+- **État des canaux** est accessible depuis la navigation supérieure et la barre latérale. Les utilisateurs ordinaires voient uniquement le résumé par groupe des canaux possédant une sonde configurée ; seuls les administrateurs racine voient les détails des canaux et des sondes.
+- Un administrateur racine ouvre **État des canaux → Paramètres des sondes**, choisit le canal et le modèle, puis définit le prompt, le délai d'expiration et l'état actif. L'intervalle est fixé à 10 minutes ; les sondes actives peuvent être lancées ensemble ou par le planificateur.
+- Chaque résumé combine les résultats des sondes avec le trafic réel des utilisateurs sur les 10 dernières minutes : nombre de requêtes, requêtes réussies et latence. Les requêtes de sonde, annulées par le client ou refusées par l'activité ne sont pas comptées.
+- La fonctionnalité prend en charge SQLite, MySQL et PostgreSQL.
+
+### Canevas infini
+
+- **Canevas infini** est accessible depuis la navigation supérieure et la barre latérale. Il prend en charge les notes, les images importées, les connexions et la génération d'images.
+- Les données du canevas et les images importées restent dans le navigateur de l'utilisateur (Local Storage et IndexedDB) et ne sont pas envoyées au serveur. Faites un clic droit sur une image puis choisissez **Supprimer** pour supprimer uniquement cette image et sa ressource locale.
+- Pour générer une image, ouvrez **Canevas infini → Paramètres de génération**, saisissez un endpoint compatible OpenAI et un modèle, puis fournissez la clé API lors de la génération. La clé API reste en mémoire et est effacée en quittant la page.
+
+### Automatisation des images Docker
+
+- `.github/workflows/docker-ghcr.yml` construit des images `linux/amd64` et `linux/arm64` lors des pushes de branches ou de tags et des exécutions manuelles, puis les publie sur `ghcr.io/<propriétaire>/<dépôt>`.
+- `.github/workflows/docker-build.yml` publie les tags de version ou un tag choisi manuellement sur Docker Hub sous `calciumion/new-api`. `.github/workflows/docker-image-branch.yml` permet de construire manuellement une branche.
+- Après une exécution réussie, ouvrez la page **Summary** du workflow GitHub Actions pour trouver le lien du paquet, les tags et les commandes `docker pull`, puis utilisez le tag affiché.
 
 > [!IMPORTANT]
 > - Ce projet est exclusivement destiné aux scénarios de passerelle API d'IA légalement autorisés, d'authentification organisationnelle, de gestion multi-modèles, d'analyse d'utilisation, de comptabilisation des coûts et de déploiement privé.

@@ -6,6 +6,8 @@
 
 **连接模型、应用与 Agent 的 AI 网关**
 
+<p align="center"><strong>由 StarryBest.COM 开发</strong></p>
+
 <p align="center">
   <strong>简体中文</strong> |
   <a href="./README.zh_TW.md">繁體中文</a> |
@@ -45,6 +47,7 @@
 
 <p align="center">
   <a href="#screenshots">项目截图</a> •
+  <a href="#feature-updates">本次更新</a> •
   <a href="#capabilities">核心能力</a> •
   <a href="#quick-start">快速开始</a> •
   <a href="#deployment">部署运维</a> •
@@ -61,6 +64,29 @@
 New API 是面向应用、Agent 和团队的自托管 AI 网关。将不同厂商的模型服务接入统一入口，在同一套控制台中管理渠道、访问权限、用量与成本。
 
 你可以用它为团队分配已授权的模型资源，在切换上游时减少客户端改动，或搭建自己的多模型服务。支持接入 OpenAI、Anthropic、Google Gemini、Azure OpenAI、AWS Bedrock、Vertex AI、DeepSeek、通义千问及其他兼容服务。
+
+<a id="feature-updates"></a>
+
+## 本次功能更新与使用方法
+
+### 渠道状态
+
+- 顶部导航和侧边栏均已加入“渠道状态”。普通用户只能看到已配置探针渠道的分组汇总，只有最高管理员可以查看渠道和探针详情。
+- 最高管理员进入“渠道状态 → 探针设置”，选择渠道、模型，填写提示词和超时时间并启用探针。探针周期固定为 10 分钟，启用的探针可以一起运行，也会由调度器自动运行。
+- 每个分组会结合探针结果与最近 10 分钟的真实用户请求，显示请求数、成功数和响应延迟。探针请求、客户端取消的请求和业务拒绝不会计入用户使用统计。
+- 渠道状态支持 SQLite、MySQL 和 PostgreSQL。
+
+### 无限画布
+
+- 顶部导航和侧边栏均已加入“无限画布”，支持便签、上传图片、连线和生图。
+- 画布数据和上传的图片资源只保存在当前用户的浏览器（Local Storage 和 IndexedDB）中，不会上传到应用服务器。右键图片并选择“删除”，即可只删除该图片及其本地资源。
+- 生图时打开“无限画布 → 生图设置”，填写 OpenAI 兼容接口地址和模型；生成时输入 API Key。API Key 只保存在内存中，离开页面后会清除。
+
+### Docker 镜像自动化
+
+- `.github/workflows/docker-ghcr.yml` 会在分支或标签推送、手动运行时构建 `linux/amd64` 和 `linux/arm64` 镜像，并发布到 `ghcr.io/<所有者>/<仓库>`。
+- `.github/workflows/docker-build.yml` 用于发布标签或手动指定标签，向 Docker Hub 的 `calciumion/new-api` 发布多架构镜像；`.github/workflows/docker-image-branch.yml` 支持手动构建指定分支。
+- 工作流成功后打开 GitHub Actions 的“Summary”，即可查看镜像包链接、标签和 `docker pull` 命令。按摘要中的标签拉取，例如 `docker pull ghcr.io/<所有者>/<仓库>:latest` 或 `docker pull calciumion/new-api:<标签>`。
 
 > [!IMPORTANT]
 > - 本项目仅面向合法授权的 AI API 网关、组织内部鉴权、多模型管理、用量统计、成本核算和私有化部署场景。

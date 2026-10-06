@@ -138,6 +138,9 @@ func RecentChannelUsage(channelIDs []int, now time.Time) map[int]ChannelUsage {
 	for id, commands := range queries {
 		for _, command := range commands {
 			values := command.Val()
+			if len(values) == 0 {
+				continue
+			}
 			requests, _ := strconv.ParseInt(values["requests"], 10, 64)
 			successes, _ := strconv.ParseInt(values["successes"], 10, 64)
 			latency, _ := strconv.ParseInt(values["latency"], 10, 64)
@@ -149,6 +152,29 @@ func RecentChannelUsage(channelIDs []int, now time.Time) map[int]ChannelUsage {
 			usage.LastRequestAt = max(usage.LastRequestAt, last)
 			merged[id] = usage
 		}
+	}
+	// Writes to Redis are intentionally asynchronous so request latency is not
+	// tied to the metrics store. Until that write completes, keep the local
+	// sample visible instead of replacing it with an empty Redis result. If
+	// Redis is briefly behind the local process, preserve the local counters
+	// until the async write catches up.
+	for id, local := range result {
+		remote, exists := merged[id]
+		if !exists || remote.Requests == 0 {
+			merged[id] = local
+			continue
+		}
+		if remote.Requests < local.Requests {
+			remote.Requests = local.Requests
+		}
+		// Redis can contain an older sample with the same request count when
+		// the local process has just restarted or its async write is pending.
+		// Preserve local fields that are ahead without double-counting a remote
+		// aggregate that already includes this process.
+		remote.Successes = max(remote.Successes, local.Successes)
+		remote.TotalLatencyMS = max(remote.TotalLatencyMS, local.TotalLatencyMS)
+		remote.LastRequestAt = max(remote.LastRequestAt, local.LastRequestAt)
+		merged[id] = remote
 	}
 	return merged
 }

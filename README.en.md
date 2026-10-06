@@ -6,6 +6,8 @@
 
 **An AI gateway for models, applications, and agents**
 
+<p align="center"><strong>Developed by StarryBest.COM</strong></p>
+
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
   <a href="./README.zh_TW.md">繁體中文</a> |
@@ -47,6 +49,7 @@
 
 <p align="center">
   <a href="#screenshots">Screenshots</a> •
+  <a href="#feature-updates">Recent changes</a> •
   <a href="#capabilities">Capabilities</a> •
   <a href="#quick-start">Quick start</a> •
   <a href="#deployment">Deployment</a> •
@@ -63,6 +66,29 @@
 New API is a self-hosted AI gateway for applications, agents, and teams. Connect upstream model services, expose a consistent API to your clients, and manage routing, access, usage, and costs in one place.
 
 Use it to share authorized model access across a team, switch providers without configuring every client again, or operate a private multi-model service with a web console. Upstreams include OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, Vertex AI, DeepSeek, Qwen, and other compatible services.
+
+<a id="feature-updates"></a>
+
+## Recent changes and usage
+
+### Channel Status
+
+- **Channel Status** is available from the top navigation and sidebar. Regular users see group summaries for channels that have a configured probe; only root administrators can see channel and probe details.
+- Root administrators can configure a channel, model, prompt, timeout, and enabled state under **Channel Status → Probe settings**. The interval is fixed at 10 minutes, and enabled probes can be run together or by the scheduler.
+- Each group summary combines probe results with real user traffic from the latest 10 minutes, including request count, successful request count, and response latency. Probe calls, cancelled client requests, and business rejections are excluded from user traffic statistics.
+- The feature works with SQLite, MySQL, and PostgreSQL.
+
+### Infinite Canvas
+
+- **Infinite Canvas** is available from the top navigation and sidebar. It supports notes, uploaded images, connections, and image generation.
+- Canvas data and uploaded image assets are stored in the current user's browser (local storage and IndexedDB); they are not uploaded to the application server. Right-click an image and choose **Delete** to remove only that image and its local asset.
+- To generate images, open **Infinite Canvas → Image generation settings**, enter an OpenAI-compatible endpoint and model, and provide an API key when generating. The API key is kept in memory and cleared when leaving the page.
+
+### Docker image automation
+
+- `.github/workflows/docker-ghcr.yml` builds `linux/amd64` and `linux/arm64` images for branch/tag pushes and manual runs, publishing to `ghcr.io/<owner>/<repository>`.
+- `.github/workflows/docker-build.yml` builds release tags or a manually selected tag and publishes multi-architecture images to `calciumion/new-api` on Docker Hub. `.github/workflows/docker-image-branch.yml` supports manual branch builds.
+- After a successful run, open the workflow's **Summary** page to find the package link, image tags, and `docker pull` commands. Pull the tag shown there, for example `docker pull ghcr.io/<owner>/<repository>:latest` or `docker pull calciumion/new-api:<tag>`.
 
 > [!NOTE]
 > This is an open-source project developed based on [One API](https://github.com/songquanpeng/one-api)
