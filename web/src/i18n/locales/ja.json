@@ -6981,6 +6981,14 @@
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
     "Zoom in": "拡大",
-    "Zoom out": "縮小"
+    "Zoom out": "縮小",
+    "Multiple Epay gateways": "複数のEpayゲートウェイ",
+    "Secret keys are encrypted and never shown again": "秘密鍵は暗号化され、保存後は表示されません",
+    "Add gateway": "ゲートウェイを追加",
+    "Gateway name": "ゲートウェイ名",
+    "Gateway ID": "ゲートウェイID",
+    "Leave blank to keep current key": "現在の鍵を保持するには空欄にしてください",
+    "Delete gateway": "ゲートウェイを削除",
+    "Save gateways": "ゲートウェイを保存"
   }
 }

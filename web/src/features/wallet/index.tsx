@@ -173,7 +173,7 @@ export function Wallet(props: WalletProps) {
   const handlePaymentMethodSelect = async (method: PaymentMethod) => {
     setSelectedPaymentMethod(method)
     setSelectedWaffoMethodIndex(null)
-    setPaymentLoading(method.type)
+    setPaymentLoading(`${method.gateway_id || 'default'}-${method.type}`)
 
     try {
       // Validate minimum topup

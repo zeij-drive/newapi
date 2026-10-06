@@ -346,7 +346,7 @@ export function RechargeFormCard({
 
                       const button = (
                         <Button
-                          key={method.type}
+                          key={`${method.gateway_id || 'default'}-${method.type}`}
                           variant='outline'
                           onClick={() => onPaymentMethodSelect(method)}
                           disabled={disabled || !!paymentLoading}
@@ -358,7 +358,7 @@ export function RechargeFormCard({
                           }
                           className='min-h-14 min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left'
                         >
-                          {paymentLoading === method.type ? (
+                          {paymentLoading === `${method.gateway_id || 'default'}-${method.type}` ? (
                             <Loader2 className='h-4 w-4 animate-spin' />
                           ) : (
                             getPaymentIcon(
@@ -382,7 +382,7 @@ export function RechargeFormCard({
                       )
 
                       return disabled ? (
-                        <TooltipProvider key={method.type}>
+                        <TooltipProvider key={`${method.gateway_id || 'default'}-${method.type}`}>
                           <Tooltip>
                             <TooltipTrigger render={button} />
                             <TooltipContent>{disabledReason}</TooltipContent>

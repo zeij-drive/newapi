@@ -34,6 +34,30 @@ import type {
   UpstreamRatiosResponse,
 } from './types'
 
+export interface EpayGatewayView {
+  id: string
+  name: string
+  address: string
+  merchant_id: string
+  enabled: boolean
+  key_set: boolean
+}
+
+export async function getEpayGateways() {
+  const res = await api.get<{ success: boolean; data: EpayGatewayView[] }>(
+    '/api/option/epay_gateways'
+  )
+  return res.data
+}
+
+export async function updateEpayGateways(gateways: Array<EpayGatewayView & { key?: string }>) {
+  const res = await api.put<{ success: boolean; data: EpayGatewayView[]; message?: string }>(
+    '/api/option/epay_gateways',
+    { gateways }
+  )
+  return res.data
+}
+
 export async function getSystemOptions() {
   const res = await api.get<SystemOptionsResponse>('/api/option/')
   return res.data

@@ -100,6 +100,11 @@ func isEpayTopUpEnabled() bool {
 }
 
 func isEpayWebhookConfigured() bool {
+	for _, gateway := range operation_setting.GetEpayGateways() {
+		if gateway.Enabled && strings.TrimSpace(gateway.Address) != "" && strings.TrimSpace(gateway.MerchantID) != "" && strings.TrimSpace(gateway.Key) != "" {
+			return true
+		}
+	}
 	return strings.TrimSpace(operation_setting.PayAddress) != "" &&
 		strings.TrimSpace(operation_setting.EpayId) != "" &&
 		strings.TrimSpace(operation_setting.EpayKey) != ""

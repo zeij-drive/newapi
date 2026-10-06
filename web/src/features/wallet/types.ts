@@ -98,6 +98,7 @@ export interface PaymentMethod {
   color?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
+  gateway_id?: string
   /** Optional react-icons component name or safe icon URL */
   icon?: string
 }
@@ -184,6 +185,7 @@ export interface PaymentRequest {
   amount: number
   /** Payment method identifier */
   payment_method: string
+  gateway_id?: string
 }
 
 /**

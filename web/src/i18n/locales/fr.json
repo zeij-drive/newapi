@@ -6981,6 +6981,14 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Zoom in": "Agrandir",
-    "Zoom out": "Réduire"
+    "Zoom out": "Réduire",
+    "Multiple Epay gateways": "Plusieurs passerelles Epay",
+    "Secret keys are encrypted and never shown again": "Les clés secrètes sont chiffrées et ne sont plus affichées",
+    "Add gateway": "Ajouter une passerelle",
+    "Gateway name": "Nom de la passerelle",
+    "Gateway ID": "ID de la passerelle",
+    "Leave blank to keep current key": "Laisser vide pour conserver la clé actuelle",
+    "Delete gateway": "Supprimer la passerelle",
+    "Save gateways": "Enregistrer les passerelles"
   }
 }

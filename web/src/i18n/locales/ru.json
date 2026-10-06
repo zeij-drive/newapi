@@ -6981,6 +6981,14 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Zoom in": "Увеличить",
-    "Zoom out": "Уменьшить"
+    "Zoom out": "Уменьшить",
+    "Multiple Epay gateways": "Несколько шлюзов Epay",
+    "Secret keys are encrypted and never shown again": "Секретные ключи шифруются и больше не отображаются",
+    "Add gateway": "Добавить шлюз",
+    "Gateway name": "Название шлюза",
+    "Gateway ID": "ID шлюза",
+    "Leave blank to keep current key": "Оставьте пустым, чтобы сохранить текущий ключ",
+    "Delete gateway": "Удалить шлюз",
+    "Save gateways": "Сохранить шлюзы"
   }
 }

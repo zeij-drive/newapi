@@ -6981,6 +6981,14 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Zoom in": "Phóng to",
-    "Zoom out": "Thu nhỏ"
+    "Zoom out": "Thu nhỏ",
+    "Multiple Epay gateways": "Nhiều cổng Epay",
+    "Secret keys are encrypted and never shown again": "Khóa bí mật được mã hóa và không hiển thị lại",
+    "Add gateway": "Thêm cổng",
+    "Gateway name": "Tên cổng",
+    "Gateway ID": "ID cổng",
+    "Leave blank to keep current key": "Để trống để giữ khóa hiện tại",
+    "Delete gateway": "Xóa cổng",
+    "Save gateways": "Lưu các cổng"
   }
 }

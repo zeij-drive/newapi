@@ -19,6 +19,7 @@ import (
 type SubscriptionEpayPayRequest struct {
 	PlanId        int    `json:"plan_id"`
 	PaymentMethod string `json:"payment_method"`
+	GatewayID     string `json:"gateway_id"`
 }
 
 func SubscriptionRequestEpay(c *gin.Context) {
@@ -78,7 +79,10 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("SUBUSR%dNO%s", userId, tradeNo)
 
-	client := GetEpayClient()
+	client, gateway := getEpayClientForGateway(req.GatewayID)
+	if client == nil && req.GatewayID == "" && len(operation_setting.GetEpayGateways()) == 0 {
+		client = GetEpayClient()
+	}
 	if client == nil {
 		common.ApiErrorMsg(c, "当前管理员未配置支付信息")
 		return
@@ -91,8 +95,14 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
 		PaymentProvider: model.PaymentProviderEpay,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		PaymentGateway: func() string {
+			if gateway != nil {
+				return gateway.ID
+			}
+			return ""
+		}(),
+		CreateTime: time.Now().Unix(),
+		Status:     common.TopUpStatusPending,
 	}
 	if err := order.Insert(); err != nil {
 		common.ApiErrorMsg(c, "创建订单失败")
@@ -141,13 +151,25 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		return
 	}
 
+	order := model.GetSubscriptionOrderByTradeNo(params["out_trade_no"])
+	if order == nil {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
 	client := GetEpayClient()
+	if order.PaymentGateway != "" {
+		client = getEpayClientForStoredGateway(order.PaymentGateway)
+	}
 	if client == nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
 	verifyInfo, err := client.Verify(params)
 	if err != nil || !verifyInfo.VerifyStatus {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -196,13 +218,25 @@ func SubscriptionEpayReturn(c *gin.Context) {
 		return
 	}
 
+	order := model.GetSubscriptionOrderByTradeNo(params["out_trade_no"])
+	if order == nil {
+		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+		return
+	}
 	client := GetEpayClient()
+	if order.PaymentGateway != "" {
+		client = getEpayClientForStoredGateway(order.PaymentGateway)
+	}
 	if client == nil {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return
 	}
 	verifyInfo, err := client.Verify(params)
 	if err != nil || !verifyInfo.VerifyStatus {
+		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+		return
+	}
+	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return
 	}

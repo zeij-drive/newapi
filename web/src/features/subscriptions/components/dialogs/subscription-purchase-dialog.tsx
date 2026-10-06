@@ -45,6 +45,7 @@ import type { PlanRecord } from '../../types'
 interface PaymentMethod {
   type: string
   name?: string
+  gateway_id?: string
 }
 
 interface Props {
@@ -67,12 +68,15 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const { currency } = useSystemConfig()
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
+  const [selectedEpayGateway, setSelectedEpayGateway] = useState('')
 
   useEffect(() => {
     if (props.open && props.epayMethods && props.epayMethods.length > 0) {
       setSelectedEpayMethod(props.epayMethods[0].type)
+      setSelectedEpayGateway(props.epayMethods[0].gateway_id || '')
     } else if (!props.open) {
       setSelectedEpayMethod('')
+      setSelectedEpayGateway('')
     }
   }, [props.open, props.epayMethods])
 
@@ -172,6 +176,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
       const res = await paySubscriptionEpay({
         plan_id: plan.id,
         payment_method: selectedEpayMethod,
+        gateway_id: selectedEpayGateway || undefined,
       })
       if (res.message === 'success' && res.url) {
         const form = document.createElement('form')
@@ -375,11 +380,17 @@ export function SubscriptionPurchaseDialog(props: Props) {
               <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
                 <Combobox
                   options={(props.epayMethods || []).map((m) => ({
-                    value: m.type,
+                    value: `${m.gateway_id || ''}::${m.type}`,
                     label: m.name || m.type,
                   }))}
-                  value={selectedEpayMethod}
-                  onValueChange={(v) => v !== null && setSelectedEpayMethod(v)}
+                  value={`${selectedEpayGateway}::${selectedEpayMethod}`}
+                  onValueChange={(v) => {
+                    const method = props.epayMethods?.find((item) => `${item.gateway_id || ''}::${item.type}` === v)
+                    if (method) {
+                      setSelectedEpayMethod(method.type)
+                      setSelectedEpayGateway(method.gateway_id || '')
+                    }
+                  }}
                   disabled={limitReached}
                   className='flex-1'
                 />

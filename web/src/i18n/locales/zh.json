@@ -6981,6 +6981,14 @@
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放",
     "Zoom in": "放大",
-    "Zoom out": "缩小"
+    "Zoom out": "缩小",
+    "Multiple Epay gateways": "多个 Epay 网关",
+    "Secret keys are encrypted and never shown again": "密钥会加密保存，保存后不再显示",
+    "Add gateway": "添加网关",
+    "Gateway name": "网关名称",
+    "Gateway ID": "网关 ID",
+    "Leave blank to keep current key": "留空以保留当前密钥",
+    "Delete gateway": "删除网关",
+    "Save gateways": "保存网关"
   }
 }

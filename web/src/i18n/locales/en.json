@@ -6981,6 +6981,14 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Zoom in": "Zoom in",
-    "Zoom out": "Zoom out"
+    "Zoom out": "Zoom out",
+    "Multiple Epay gateways": "Multiple Epay gateways",
+    "Secret keys are encrypted and never shown again": "Secret keys are encrypted and never shown again",
+    "Add gateway": "Add gateway",
+    "Gateway name": "Gateway name",
+    "Gateway ID": "Gateway ID",
+    "Leave blank to keep current key": "Leave blank to keep current key",
+    "Delete gateway": "Delete gateway",
+    "Save gateways": "Save gateways"
   }
 }

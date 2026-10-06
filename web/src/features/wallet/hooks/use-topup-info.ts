@@ -72,6 +72,7 @@ function parsePaymentMethods(
       return {
         name: typeof item.name === 'string' ? item.name : '',
         type,
+        gateway_id: typeof item.gateway_id === 'string' ? item.gateway_id : undefined,
         color: typeof item.color === 'string' ? item.color : undefined,
         icon: typeof item.icon === 'string' ? item.icon : undefined,
         min_topup:
