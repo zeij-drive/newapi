@@ -43,6 +43,7 @@ func SetApiRouter(router *gin.Engine) {
 			perfMetricsRoute.GET("", controller.GetPerfMetrics)
 		}
 		apiRouter.GET("/rankings", middleware.HeaderNavModuleAuth("rankings"), controller.GetRankings)
+		apiRouter.GET("/usage-ranking", middleware.HeaderNavModuleAuth("rankings"), controller.GetUsageRanking)
 		apiRouter.GET("/verification", middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
@@ -214,6 +215,8 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.GET("/epay_gateways", controller.GetEpayGatewayConfig)
+			optionRoute.GET("/usage-ranking-rewards", controller.GetUsageRankingRewards)
+			optionRoute.PUT("/usage-ranking-rewards", controller.UpdateUsageRankingRewards)
 			optionRoute.PUT("/epay_gateways", controller.UpdateEpayGatewayConfig)
 			optionRoute.GET("/request_policy", controller.GetRequestPolicy)
 			optionRoute.PATCH("/request_policy", controller.UpdateRequestPolicy)

@@ -32,3 +32,22 @@ export async function getRankings(
   const res = await api.get('/api/rankings', { params: { period } })
   return res.data
 }
+
+export type UsageRankingPeriod = RankingPeriod | 'all'
+
+export type UsageRankingSnapshot = {
+  period: UsageRankingPeriod
+  start: number
+  end: number
+  total_tokens: number
+  users: Array<{ user_id: number; name: string; total_tokens: number }>
+}
+
+export async function getUsageRanking(period: UsageRankingPeriod) {
+  const res = await api.get<{
+    success: boolean
+    message?: string
+    data: UsageRankingSnapshot
+  }>('/api/usage-ranking', { params: { period } })
+  return res.data
+}

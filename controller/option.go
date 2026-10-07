@@ -207,6 +207,9 @@ func UpdateOption(c *gin.Context) {
 	case operation_setting.EpayGatewaysOptionKey:
 		common.ApiErrorMsg(c, "Epay 网关只能通过专用设置接口修改")
 		return
+	case operation_setting.UsageRankingRewardsOptionKey:
+		common.ApiErrorMsg(c, "排行榜奖励只能通过专用设置接口修改")
+		return
 	case "QuotaForInviter", "QuotaForInvitee":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
 			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
