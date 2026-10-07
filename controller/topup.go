@@ -32,27 +32,25 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 	if complianceConfirmed {
 		gateways := currentEpayGateways()
-		if len(gateways) > 0 {
-			methods := make([]map[string]string, 0, len(payMethods)*len(gateways))
-			for _, gateway := range gateways {
-				if !gateway.Enabled || gateway.Key == "" {
+		methods := make([]map[string]string, 0, len(payMethods)*len(gateways))
+		for _, gateway := range gateways {
+			if !gateway.Enabled || gateway.Key == "" {
+				continue
+			}
+			for _, method := range payMethods {
+				if method["type"] == "stripe" || method["type"] == model.PaymentMethodWaffo || method["type"] == model.PaymentMethodWaffoPancake {
 					continue
 				}
-				for _, method := range payMethods {
-					if method["type"] == "stripe" || method["type"] == model.PaymentMethodWaffo || method["type"] == model.PaymentMethodWaffoPancake {
-						continue
-					}
-					clone := map[string]string{}
-					for key, value := range method {
-						clone[key] = value
-					}
-					clone["gateway_id"] = gateway.ID
-					clone["name"] = gateway.Name + " - " + method["name"]
-					methods = append(methods, clone)
+				clone := map[string]string{}
+				for key, value := range method {
+					clone[key] = value
 				}
+				clone["gateway_id"] = gateway.ID
+				clone["name"] = gateway.Name + " - " + method["name"]
+				methods = append(methods, clone)
 			}
-			payMethods = methods
 		}
+		payMethods = methods
 	}
 
 	// 如果启用了 Stripe 支付，添加到支付方法列表
@@ -195,6 +193,12 @@ func getEpayClientForGateway(gatewayID string) (*epay.Client, *operation_setting
 }
 
 func getEpayClientForStoredGateway(gatewayID string) *epay.Client {
+	if gatewayID == "" {
+		if client := GetEpayClient(); client != nil {
+			return client
+		}
+		gatewayID = "default"
+	}
 	gateways := currentEpayGateways()
 	for i := range gateways {
 		if gateways[i].ID != gatewayID || gateways[i].Key == "" {
@@ -500,10 +504,7 @@ func EpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-	client := GetEpayClient()
-	if topUp.PaymentGateway != "" {
-		client = getEpayClientForStoredGateway(topUp.PaymentGateway)
-	}
+	client := getEpayClientForStoredGateway(topUp.PaymentGateway)
 	if client == nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 client 未初始化 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 		_, err := c.Writer.Write([]byte("fail"))

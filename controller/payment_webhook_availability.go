@@ -96,20 +96,26 @@ func isEpayTopUpEnabled() bool {
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
-	return isEpayWebhookConfigured() && len(operation_setting.PayMethods) > 0
-}
-
-func isEpayWebhookConfigured() bool {
-	for _, gateway := range operation_setting.GetEpayGateways() {
+	if len(operation_setting.PayMethods) == 0 {
+		return false
+	}
+	for _, gateway := range currentEpayGateways() {
 		if gateway.Enabled && strings.TrimSpace(gateway.Address) != "" && strings.TrimSpace(gateway.MerchantID) != "" && strings.TrimSpace(gateway.Key) != "" {
 			return true
 		}
 	}
-	return strings.TrimSpace(operation_setting.PayAddress) != "" &&
-		strings.TrimSpace(operation_setting.EpayId) != "" &&
-		strings.TrimSpace(operation_setting.EpayKey) != ""
+	return false
+}
+
+func isEpayWebhookConfigured() bool {
+	for _, gateway := range currentEpayGateways() {
+		if strings.TrimSpace(gateway.Address) != "" && strings.TrimSpace(gateway.MerchantID) != "" && strings.TrimSpace(gateway.Key) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func isEpayWebhookEnabled() bool {
-	return isEpayTopUpEnabled()
+	return isPaymentComplianceConfirmed() && isEpayWebhookConfigured()
 }

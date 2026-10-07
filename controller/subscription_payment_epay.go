@@ -156,10 +156,7 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-	client := GetEpayClient()
-	if order.PaymentGateway != "" {
-		client = getEpayClientForStoredGateway(order.PaymentGateway)
-	}
+	client := getEpayClientForStoredGateway(order.PaymentGateway)
 	if client == nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
@@ -223,10 +220,7 @@ func SubscriptionEpayReturn(c *gin.Context) {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return
 	}
-	client := GetEpayClient()
-	if order.PaymentGateway != "" {
-		client = getEpayClientForStoredGateway(order.PaymentGateway)
-	}
+	client := getEpayClientForStoredGateway(order.PaymentGateway)
 	if client == nil {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return

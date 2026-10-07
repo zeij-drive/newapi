@@ -1,10 +1,15 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -142,18 +147,21 @@ func TestWaffoPancakeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	require.False(t, isWaffoPancakeWebhookEnabled())
 }
 
-func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
+func TestEpayWebhookRemainsEnabledForPendingOrders(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	originalPayAddress := operation_setting.PayAddress
 	originalEpayID := operation_setting.EpayId
 	originalEpayKey := operation_setting.EpayKey
 	originalPayMethods := operation_setting.PayMethods
+	originalGateways := operation_setting.GetEpayGateways()
 	t.Cleanup(func() {
 		operation_setting.PayAddress = originalPayAddress
 		operation_setting.EpayId = originalEpayID
 		operation_setting.EpayKey = originalEpayKey
 		operation_setting.PayMethods = originalPayMethods
+		operation_setting.SetEpayGateways(originalGateways)
 	})
+	operation_setting.SetEpayGateways(nil)
 
 	operation_setting.PayAddress = "https://pay.example.com"
 	operation_setting.EpayId = "epay_id"
@@ -165,5 +173,94 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	require.True(t, isEpayWebhookEnabled())
 
 	operation_setting.PayMethods = nil
-	require.False(t, isEpayWebhookEnabled())
+	require.False(t, isEpayTopUpEnabled())
+	require.True(t, isEpayWebhookEnabled())
+
+	operation_setting.PayAddress = ""
+	operation_setting.EpayId = ""
+	operation_setting.EpayKey = ""
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{{
+		ID: "primary", Name: "Primary", Address: "https://pay.example.com",
+		MerchantID: "merchant", Key: "secret", Enabled: false,
+	}})
+	require.False(t, isEpayTopUpEnabled())
+	require.True(t, isEpayWebhookEnabled())
+}
+
+func TestEpayLegacyOrderUsesDefaultGatewayAfterMigration(t *testing.T) {
+	previousAddress := operation_setting.PayAddress
+	previousID := operation_setting.EpayId
+	previousKey := operation_setting.EpayKey
+	previousGateways := operation_setting.GetEpayGateways()
+	t.Cleanup(func() {
+		operation_setting.PayAddress = previousAddress
+		operation_setting.EpayId = previousID
+		operation_setting.EpayKey = previousKey
+		operation_setting.SetEpayGateways(previousGateways)
+	})
+
+	operation_setting.PayAddress = ""
+	operation_setting.EpayId = ""
+	operation_setting.EpayKey = ""
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{{
+		ID: "default", Name: "Epay", Address: "https://pay.example.com",
+		MerchantID: "merchant", Key: "old-secret", Enabled: false,
+	}})
+
+	require.NotNil(t, getEpayClientForStoredGateway(""))
+	require.NotNil(t, getEpayClientForStoredGateway("default"))
+	require.Nil(t, getEpayClientForStoredGateway("unknown"))
+}
+
+func TestEpayGatewayOptionRequiresDedicatedEndpoint(t *testing.T) {
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(`{"key":"EpayGateways","value":"[]"}`))
+
+	UpdateOption(context)
+
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	require.False(t, payload.Success)
+}
+
+func TestTopUpInfoHidesEpayMethodsWithoutEnabledGateway(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	previousAddress := operation_setting.PayAddress
+	previousID := operation_setting.EpayId
+	previousKey := operation_setting.EpayKey
+	previousMethods := operation_setting.PayMethods
+	previousGateways := operation_setting.GetEpayGateways()
+	t.Cleanup(func() {
+		operation_setting.PayAddress = previousAddress
+		operation_setting.EpayId = previousID
+		operation_setting.EpayKey = previousKey
+		operation_setting.PayMethods = previousMethods
+		operation_setting.SetEpayGateways(previousGateways)
+	})
+	operation_setting.PayAddress = ""
+	operation_setting.EpayId = ""
+	operation_setting.EpayKey = ""
+	operation_setting.PayMethods = []map[string]string{{"name": "Alipay", "type": "alipay"}}
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{{
+		ID: "disabled", Name: "Disabled", Address: "https://pay.example.com",
+		MerchantID: "merchant", Key: "secret", Enabled: false,
+	}})
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/topup/info", nil)
+	GetTopUpInfo(context)
+
+	var payload struct {
+		Data struct {
+			PayMethods []map[string]string `json:"pay_methods"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	for _, method := range payload.Data.PayMethods {
+		require.NotEqual(t, "alipay", method["type"])
+	}
 }

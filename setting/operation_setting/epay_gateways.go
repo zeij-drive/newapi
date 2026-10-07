@@ -20,8 +20,10 @@ type EpayGateway struct {
 	Address      string `json:"address"`
 	MerchantID   string `json:"merchant_id"`
 	EncryptedKey string `json:"-"`
-	Key          string `json:"key"`
-	Enabled      bool   `json:"enabled"`
+	// Key is only used while constructing an upstream client. It must never be
+	// serialized into an API response or a persisted option value.
+	Key     string `json:"-"`
+	Enabled bool   `json:"enabled"`
 }
 
 type EpayGatewayView struct {
