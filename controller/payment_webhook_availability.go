@@ -100,8 +100,13 @@ func isEpayTopUpEnabled() bool {
 		return false
 	}
 	for _, gateway := range currentEpayGateways() {
-		if gateway.Enabled && strings.TrimSpace(gateway.Address) != "" && strings.TrimSpace(gateway.MerchantID) != "" && strings.TrimSpace(gateway.Key) != "" {
-			return true
+		if !gateway.Enabled || strings.TrimSpace(gateway.Address) == "" || strings.TrimSpace(gateway.MerchantID) == "" || strings.TrimSpace(gateway.Key) == "" {
+			continue
+		}
+		for _, method := range operation_setting.PayMethods {
+			if isEpayPaymentMethod(method) && (strings.TrimSpace(method["gateway_id"]) == "" || strings.TrimSpace(method["gateway_id"]) == gateway.ID) {
+				return true
+			}
 		}
 	}
 	return false

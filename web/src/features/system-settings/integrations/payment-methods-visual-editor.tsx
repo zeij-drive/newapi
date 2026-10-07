@@ -129,6 +129,7 @@ export function PaymentMethodsVisualEditor({
         typeof item.type === 'string' &&
         (!('icon' in item) || typeof item.icon === 'string') &&
         (!('min_topup' in item) || typeof item.min_topup === 'string') &&
+        (!('gateway_id' in item) || typeof item.gateway_id === 'string') &&
         (!('color' in item) || typeof item.color === 'string')
     )
   }, [value])
@@ -161,7 +162,9 @@ export function PaymentMethodsVisualEditor({
           'name' in item &&
           'type' in item &&
           item.name === editData.name &&
-          item.type === editData.type
+          item.type === editData.type &&
+          ('gateway_id' in item ? item.gateway_id : undefined) ===
+            editData.gateway_id
       )
       if (index !== -1) {
         updatedArray[index] = data
@@ -190,7 +193,9 @@ export function PaymentMethodsVisualEditor({
           'name' in item &&
           'type' in item &&
           item.name === method.name &&
-          item.type === method.type
+          item.type === method.type &&
+          ('gateway_id' in item ? item.gateway_id : undefined) ===
+            method.gateway_id
         )
     )
 
@@ -222,7 +227,9 @@ export function PaymentMethodsVisualEditor({
         'type' in item &&
         'name' in item &&
         item.type === template.type &&
-        item.name === template.name
+        item.name === template.name &&
+        ('gateway_id' in item ? item.gateway_id : undefined) ===
+          template.gateway_id
     )
 
     if (!exists) {
@@ -326,6 +333,14 @@ export function PaymentMethodsVisualEditor({
                 ),
               },
               {
+                id: 'gateway',
+                header: t('Epay gateway'),
+                cell: (method) =>
+                  ['stripe', 'waffo', 'waffo_pancake'].includes(method.type)
+                    ? '—'
+                    : method.gateway_id || t('All available gateways'),
+              },
+              {
                 id: 'icon',
                 header: t('Icon'),
                 cell: (method) => {
@@ -387,6 +402,7 @@ export function PaymentMethodsVisualEditor({
                 method.icon,
                 method.min_topup,
                 method.color,
+                method.gateway_id,
               ]
                 .filter(Boolean)
                 .join('-')
@@ -428,6 +444,17 @@ export function PaymentMethodsVisualEditor({
                     </div>
                   </div>
                   <div className='space-y-2 text-sm'>
+                    {method.type !== 'stripe' &&
+                      method.type !== 'waffo_pancake' && (
+                        <div className='flex items-center gap-2'>
+                          <span className='text-muted-foreground min-w-20'>
+                            {t('Epay gateway')}
+                          </span>
+                          <span className='truncate'>
+                            {method.gateway_id || t('All available gateways')}
+                          </span>
+                        </div>
+                      )}
                     <div className='flex items-center gap-2'>
                       <span className='text-muted-foreground min-w-20'>
                         {t('Icon')}

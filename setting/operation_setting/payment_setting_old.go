@@ -6,6 +6,8 @@ This file is the old version of the payment settings file. If you need to add ne
 package operation_setting
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -52,6 +54,22 @@ func PayMethods2JsonString() string {
 func ContainsPayMethod(method string) bool {
 	for _, payMethod := range PayMethods {
 		if payMethod["type"] == method {
+			return true
+		}
+	}
+	return false
+}
+
+// IsPayMethodAvailableForGateway reports whether a configured payment method
+// may be used with the selected Epay gateway. An empty gateway_id keeps the
+// legacy behavior and allows the method on every available Epay gateway.
+func IsPayMethodAvailableForGateway(method string, gatewayID string) bool {
+	for _, payMethod := range PayMethods {
+		if payMethod["type"] != method {
+			continue
+		}
+		configuredGatewayID := strings.TrimSpace(payMethod["gateway_id"])
+		if configuredGatewayID == "" || configuredGatewayID == gatewayID {
 			return true
 		}
 	}

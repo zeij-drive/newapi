@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -37,12 +37,15 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 
+import { getEpayGateways, type EpayGatewayView } from '../api'
+
 const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
   z.object({
     name: z.string().min(1, t('Payment method name is required')),
     type: z.string().min(1, t('Payment type key is required')),
     icon: z.string().optional(),
     min_topup: z.string().optional(),
+    gateway_id: z.string().optional(),
   })
 
 type PaymentMethodDialogFormValues = z.infer<
@@ -57,6 +60,7 @@ export type PaymentMethodData = {
   icon?: string
   min_topup?: string
   color?: string
+  gateway_id?: string
 }
 
 type PaymentMethodDialogProps = {
@@ -82,6 +86,8 @@ export function PaymentMethodDialog({
   editData,
 }: PaymentMethodDialogProps) {
   const { t } = useTranslation()
+  const [gateways, setGateways] = useState<EpayGatewayView[]>([])
+  const [gatewaysLoaded, setGatewaysLoaded] = useState(false)
   const isEditMode = !!editData
   const paymentMethodDialogSchema = createPaymentMethodDialogSchema(t)
   const paymentTypeOptions = [
@@ -120,10 +126,34 @@ export function PaymentMethodDialog({
       type: '',
       icon: '',
       min_topup: '',
+      gateway_id: '',
     },
   })
 
   const iconValue = form.watch('icon')
+  const paymentType = form.watch('type')
+  const isEpayType =
+    !!paymentType && !['stripe', 'waffo', 'waffo_pancake'].includes(paymentType)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setGatewaysLoaded(false)
+    void getEpayGateways()
+      .then((response) => {
+        if (cancelled) return
+        if (response.success && Array.isArray(response.data)) {
+          setGateways(response.data)
+          setGatewaysLoaded(true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setGatewaysLoaded(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (editData) {
@@ -132,6 +162,7 @@ export function PaymentMethodDialog({
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
         min_topup: editData.min_topup ?? '',
+        gateway_id: editData.gateway_id ?? '',
       })
     } else {
       form.reset({
@@ -139,12 +170,14 @@ export function PaymentMethodDialog({
         type: '',
         icon: '',
         min_topup: '',
+        gateway_id: '',
       })
     }
   }, [editData, form, open])
 
   const handleSubmit = (values: PaymentMethodDialogFormValues) => {
     const data: PaymentMethodData = {
+      ...editData,
       name: values.name,
       type: values.type,
     }
@@ -153,6 +186,13 @@ export function PaymentMethodDialog({
     }
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    } else {
+      delete data.min_topup
+    }
+    if (isEpayType && values.gateway_id) {
+      data.gateway_id = values.gateway_id
+    } else {
+      delete data.gateway_id
     }
     onSave(data)
     form.reset()
@@ -288,6 +328,45 @@ export function PaymentMethodDialog({
               </FormItem>
             )}
           />
+
+          {isEpayType && (
+            <FormField
+              control={form.control}
+              name='gateway_id'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Epay gateway')}</FormLabel>
+                  <FormControl>
+                    <Combobox
+                      options={[
+                        { value: '', label: t('All available gateways') },
+                        ...gateways.map((gateway) => ({
+                          value: gateway.id,
+                          label: gateway.enabled
+                            ? gateway.name
+                            : `${gateway.name} (${t('Disabled')})`,
+                          disabled:
+                            !gateway.enabled && gateway.id !== field.value,
+                        })),
+                        ...(field.value &&
+                        !gateways.some((gateway) => gateway.id === field.value)
+                          ? [{ value: field.value, label: field.value }]
+                          : []),
+                      ]}
+                      value={field.value ?? ''}
+                      onValueChange={(value) => field.onChange(value ?? '')}
+                      disabled={!gatewaysLoaded}
+                      aria-label={t('Epay gateway')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Choose the gateway for this payment option.')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
 
           <FormField
             control={form.control}

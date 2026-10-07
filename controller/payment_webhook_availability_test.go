@@ -264,3 +264,59 @@ func TestTopUpInfoHidesEpayMethodsWithoutEnabledGateway(t *testing.T) {
 		require.NotEqual(t, "alipay", method["type"])
 	}
 }
+
+func TestEpayMethodsUseConfiguredGateways(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	previousMethods := operation_setting.PayMethods
+	previousGateways := operation_setting.GetEpayGateways()
+	t.Cleanup(func() {
+		operation_setting.PayMethods = previousMethods
+		operation_setting.SetEpayGateways(previousGateways)
+	})
+	operation_setting.PayMethods = []map[string]string{
+		{"name": "WeChat", "type": "wxpay", "gateway_id": "primary"},
+		{"name": "WeChat backup", "type": "wxpay", "gateway_id": "backup"},
+	}
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{
+		{ID: "primary", Name: "Primary", Address: "https://primary.example.com", MerchantID: "merchant-primary", Key: "secret-primary", Enabled: true},
+		{ID: "backup", Name: "Backup", Address: "https://backup.example.com", MerchantID: "merchant-backup", Key: "secret-backup", Enabled: true},
+	})
+
+	require.True(t, operation_setting.IsPayMethodAvailableForGateway("wxpay", "primary"))
+	require.True(t, operation_setting.IsPayMethodAvailableForGateway("wxpay", "backup"))
+	require.False(t, operation_setting.IsPayMethodAvailableForGateway("wxpay", "other"))
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/topup/info", nil)
+	GetTopUpInfo(context)
+	var payload struct {
+		Data struct {
+			PayMethods []map[string]string `json:"pay_methods"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	var epayMethods []map[string]string
+	for _, method := range payload.Data.PayMethods {
+		if method["type"] == "wxpay" {
+			epayMethods = append(epayMethods, method)
+		}
+	}
+	require.Equal(t, []map[string]string{
+		{"name": "WeChat", "type": "wxpay", "gateway_id": "primary"},
+		{"name": "WeChat backup", "type": "wxpay", "gateway_id": "backup"},
+	}, epayMethods)
+
+	gateways := operation_setting.GetEpayGateways()
+	gateways[1].Enabled = false
+	operation_setting.SetEpayGateways(gateways)
+	require.True(t, isEpayTopUpEnabled())
+	response = httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/topup/info", nil)
+	GetTopUpInfo(context)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	for _, method := range payload.Data.PayMethods {
+		require.NotEqual(t, "backup", method["gateway_id"])
+	}
+}

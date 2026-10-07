@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +39,11 @@ func GetTopUpInfo(c *gin.Context) {
 				continue
 			}
 			for _, method := range payMethods {
-				if method["type"] == "stripe" || method["type"] == model.PaymentMethodWaffo || method["type"] == model.PaymentMethodWaffoPancake {
+				if !isEpayPaymentMethod(method) {
+					continue
+				}
+				configuredGatewayID := strings.TrimSpace(method["gateway_id"])
+				if configuredGatewayID != "" && configuredGatewayID != gateway.ID {
 					continue
 				}
 				clone := map[string]string{}
@@ -46,7 +51,9 @@ func GetTopUpInfo(c *gin.Context) {
 					clone[key] = value
 				}
 				clone["gateway_id"] = gateway.ID
-				clone["name"] = gateway.Name + " - " + method["name"]
+				if configuredGatewayID == "" {
+					clone["name"] = gateway.Name + " - " + method["name"]
+				}
 				methods = append(methods, clone)
 			}
 		}
@@ -363,7 +370,19 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
 		return
 	}
+	if !isEpayPaymentMethod(map[string]string{"type": req.PaymentMethod}) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
+		return
+	}
 	client, gateway := getEpayClientForGateway(req.GatewayID)
+	selectedGatewayID := req.GatewayID
+	if gateway != nil {
+		selectedGatewayID = gateway.ID
+	}
+	if !operation_setting.IsPayMethodAvailableForGateway(req.PaymentMethod, selectedGatewayID) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式未配置到该支付网关"})
+		return
+	}
 	if client == nil && req.GatewayID == "" && len(operation_setting.GetEpayGateways()) == 0 {
 		client = GetEpayClient()
 	}

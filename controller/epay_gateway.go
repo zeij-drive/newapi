@@ -27,6 +27,18 @@ func currentEpayGateways() []operation_setting.EpayGateway {
 	return gateways
 }
 
+func isEpayPaymentMethod(method map[string]string) bool {
+	if strings.TrimSpace(method["type"]) == "" {
+		return false
+	}
+	switch method["type"] {
+	case model.PaymentMethodStripe, model.PaymentMethodWaffo, model.PaymentMethodWaffoPancake:
+		return false
+	default:
+		return true
+	}
+}
+
 func GetEpayGatewayConfig(c *gin.Context) {
 	common.ApiSuccess(c, operation_setting.EpayGatewayViews(currentEpayGateways()))
 }

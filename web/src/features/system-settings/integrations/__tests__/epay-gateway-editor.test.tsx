@@ -1,10 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
 import { EpayGatewayEditor } from '../epay-gateway-editor'
+import { PaymentMethodDialog } from '../payment-method-dialog'
 
 beforeEach(() => {
   vi.spyOn(api, 'put').mockResolvedValue({
@@ -138,4 +139,40 @@ test('adding two gateways saves distinct IDs and secret keys', async () => {
     gateways: Array<{ id: string }>
   }
   expect(sent.gateways[0].id).not.toBe(sent.gateways[1].id)
+})
+
+test('payment option can select a specific Epay gateway', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: [
+        { id: 'primary', name: 'Primary', enabled: true, key_set: true },
+        { id: 'backup', name: 'Backup', enabled: true, key_set: true },
+      ],
+    },
+  })
+  const onSave = vi.fn()
+  render(
+    <PaymentMethodDialog
+      open
+      onOpenChange={vi.fn()}
+      onSave={onSave}
+      editData={{ name: 'WeChat backup', type: 'wxpay' }}
+    />
+  )
+  const user = userEvent.setup()
+  const gatewayInput = await screen.findByRole('combobox', {
+    name: 'Epay gateway',
+  })
+  await waitFor(() => expect(gatewayInput).toBeEnabled())
+  await user.click(gatewayInput)
+  await user.click(await screen.findByRole('option', { name: 'Backup' }))
+  await user.click(screen.getByRole('button', { name: 'Update' }))
+
+  expect(onSave).toHaveBeenCalledWith({
+    name: 'WeChat backup',
+    type: 'wxpay',
+    icon: 'SiWechat',
+    gateway_id: 'backup',
+  })
 })

@@ -50,6 +50,10 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "支付方式不存在")
 		return
 	}
+	if !isEpayPaymentMethod(map[string]string{"type": req.PaymentMethod}) {
+		common.ApiErrorMsg(c, "支付方式不存在")
+		return
+	}
 
 	userId := c.GetInt("id")
 	if plan.MaxPurchasePerUser > 0 {
@@ -80,6 +84,14 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	tradeNo = fmt.Sprintf("SUBUSR%dNO%s", userId, tradeNo)
 
 	client, gateway := getEpayClientForGateway(req.GatewayID)
+	selectedGatewayID := req.GatewayID
+	if gateway != nil {
+		selectedGatewayID = gateway.ID
+	}
+	if !operation_setting.IsPayMethodAvailableForGateway(req.PaymentMethod, selectedGatewayID) {
+		common.ApiErrorMsg(c, "支付方式未配置到该支付网关")
+		return
+	}
 	if client == nil && req.GatewayID == "" && len(operation_setting.GetEpayGateways()) == 0 {
 		client = GetEpayClient()
 	}
