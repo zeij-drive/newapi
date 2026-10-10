@@ -16,11 +16,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// EncryptWithCryptoSecret encrypts configuration secrets with the same
-// process-wide CRYPTO_SECRET used by the rest of new-api. The payload is
-// versioned so the format can evolve without exposing plaintext in storage.
+// ConfigEncryptionSecret is initialized from the internal database store before
+// options are loaded. It is independent of session and cache signing secrets.
+var ConfigEncryptionSecret string
+
+// EncryptWithCryptoSecret writes v2 configuration ciphertext with the persisted
+// secret, so restarts and environment-variable changes do not lose saved keys.
 func EncryptWithCryptoSecret(plaintext string) (string, error) {
-	key := sha256.Sum256([]byte(CryptoSecret))
+	if ConfigEncryptionSecret == "" {
+		return "", errors.New("configuration encryption is not initialized")
+	}
+	key := sha256.Sum256([]byte(ConfigEncryptionSecret))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return "", err
@@ -33,20 +39,30 @@ func EncryptWithCryptoSecret(plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), []byte("new-api-config-v1"))
+	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), []byte("new-api-config-v2"))
 	payload := append(nonce, ciphertext...)
-	return "v1." + base64.RawStdEncoding.EncodeToString(payload), nil
+	return "v2." + base64.RawStdEncoding.EncodeToString(payload), nil
 }
 
 func DecryptWithCryptoSecret(payload string) (string, error) {
-	if !strings.HasPrefix(payload, "v1.") {
+	version, encoded, ok := strings.Cut(payload, ".")
+	secret := CryptoSecret
+	switch version {
+	case "v1":
+		// Earlier versions used the deployment's CRYPTO_SECRET or SESSION_SECRET.
+	case "v2":
+		secret = ConfigEncryptionSecret
+	default:
 		return "", errors.New("invalid encrypted config payload")
 	}
-	raw, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(payload, "v1."))
+	if !ok || secret == "" {
+		return "", errors.New("invalid encrypted config payload")
+	}
+	raw, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("decode encrypted config: %w", err)
 	}
-	key := sha256.Sum256([]byte(CryptoSecret))
+	key := sha256.Sum256([]byte(secret))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return "", err
@@ -55,7 +71,7 @@ func DecryptWithCryptoSecret(payload string) (string, error) {
 	if err != nil || len(raw) < gcm.NonceSize() {
 		return "", errors.New("invalid encrypted config payload")
 	}
-	plaintext, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], []byte("new-api-config-v1"))
+	plaintext, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], []byte("new-api-config-"+version))
 	if err != nil {
 		return "", errors.New("invalid encrypted config payload")
 	}

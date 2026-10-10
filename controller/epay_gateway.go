@@ -83,10 +83,5 @@ func UpdateEpayGatewayConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	updatedGateways, err := operation_setting.ParseEpayGateways(encoded)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, operation_setting.EpayGatewayViews(updatedGateways))
+	common.ApiSuccess(c, operation_setting.EpayGatewayViews(operation_setting.GetEpayGateways()))
 }

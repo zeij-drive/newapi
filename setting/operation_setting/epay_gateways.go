@@ -55,17 +55,19 @@ func ParseEpayGateways(raw string) ([]EpayGateway, error) {
 	for _, item := range stored {
 		gateways = append(gateways, EpayGateway{ID: item.ID, Name: item.Name, Address: item.Address, MerchantID: item.MerchantID, EncryptedKey: item.Key, Enabled: item.Enabled})
 	}
+	var decryptErrors []error
 	for i := range gateways {
 		if gateways[i].EncryptedKey == "" {
 			continue
 		}
 		key, err := common.DecryptWithCryptoSecret(gateways[i].EncryptedKey)
 		if err != nil {
-			return nil, fmt.Errorf("解密 Epay 网关 %q 密钥失败: %w", gateways[i].Name, err)
+			decryptErrors = append(decryptErrors, fmt.Errorf("Epay 网关 %q 密钥无法解密，请重新填写商户密钥", gateways[i].Name))
+			continue
 		}
 		gateways[i].Key = key
 	}
-	return gateways, nil
+	return gateways, errors.Join(decryptErrors...)
 }
 
 func SetEpayGateways(gateways []EpayGateway) {
@@ -124,6 +126,9 @@ func ValidateEpayGateways(gateways []EpayGateway) error {
 		if gateway.Key == "" && gateway.EncryptedKey == "" {
 			return fmt.Errorf("Epay 网关 %q 缺少密钥", gateway.Name)
 		}
+		if gateway.Enabled && gateway.Key == "" {
+			return fmt.Errorf("Epay 网关 %q 密钥无法解密，请重新填写商户密钥", gateway.Name)
+		}
 	}
 	return nil
 }
@@ -134,7 +139,7 @@ func EpayGatewayViews(gateways []EpayGateway) []EpayGatewayView {
 		views = append(views, EpayGatewayView{
 			ID: gateway.ID, Name: gateway.Name, Address: gateway.Address,
 			MerchantID: gateway.MerchantID, Enabled: gateway.Enabled,
-			KeySet: gateway.EncryptedKey != "" || gateway.Key != "",
+			KeySet: gateway.Key != "",
 		})
 	}
 	return views
@@ -142,7 +147,7 @@ func EpayGatewayViews(gateways []EpayGateway) []EpayGatewayView {
 
 func FindEpayGateway(gateways []EpayGateway, id string) *EpayGateway {
 	for i := range gateways {
-		if gateways[i].ID == id && gateways[i].Enabled {
+		if gateways[i].ID == id && gateways[i].Enabled && gateways[i].Key != "" {
 			return &gateways[i]
 		}
 	}

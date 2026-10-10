@@ -306,6 +306,61 @@ func TestEpayGatewayOptionRequiresDedicatedEndpoint(t *testing.T) {
 	require.False(t, payload.Success)
 }
 
+func TestEpayGatewayLostKeyCanBeReplacedWithoutExposingSecrets(t *testing.T) {
+	oldDB, oldOptions, oldSecret := model.DB, common.OptionMap, common.ConfigEncryptionSecret
+	oldGateways := operation_setting.GetEpayGateways()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	model.DB, common.OptionMap = db, map[string]string{}
+	common.ConfigEncryptionSecret = "recovery-api-test-secret"
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{{
+		ID: "primary", Name: "Primary", Address: "https://pay.example.com", MerchantID: "merchant",
+		EncryptedKey: "v1.lost-key-ciphertext", Enabled: true,
+	}})
+	t.Cleanup(func() {
+		model.DB, common.OptionMap, common.ConfigEncryptionSecret = oldDB, oldOptions, oldSecret
+		operation_setting.SetEpayGateways(oldGateways)
+		require.NoError(t, sqlDB.Close())
+	})
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	GetEpayGatewayConfig(context)
+	assert.Contains(t, response.Body.String(), `"key_set":false`)
+	assert.Contains(t, response.Body.String(), `"id":"primary"`)
+	assert.NotContains(t, response.Body.String(), "lost-key-ciphertext")
+
+	for _, key := range []string{"", "replacement-merchant-secret"} {
+		input, err := common.Marshal(map[string]any{"gateways": []epayGatewayInput{{
+			ID: "primary", Name: "Primary", Address: "https://pay.example.com", MerchantID: "merchant", Key: key, Enabled: true,
+		}}})
+		require.NoError(t, err)
+		response = httptest.NewRecorder()
+		context, _ = gin.CreateTestContext(response)
+		context.Request = httptest.NewRequest(http.MethodPut, "/api/option/epay_gateways", strings.NewReader(string(input)))
+		UpdateEpayGatewayConfig(context)
+		if key == "" {
+			assert.Equal(t, http.StatusBadRequest, response.Code)
+			assert.Contains(t, response.Body.String(), "重新填写")
+			continue
+		}
+		assert.Equal(t, http.StatusOK, response.Code)
+		assert.Contains(t, response.Body.String(), `"success":true`)
+		assert.Contains(t, response.Body.String(), `"key_set":true`)
+		assert.NotContains(t, response.Body.String(), key)
+		var saved model.Option
+		require.NoError(t, db.Where(&model.Option{Key: operation_setting.EpayGatewaysOptionKey}).First(&saved).Error)
+		assert.NotContains(t, saved.Value, key)
+		assert.Contains(t, saved.Value, "v2.")
+		gateways, err := operation_setting.ParseEpayGateways(saved.Value)
+		require.NoError(t, err)
+		assert.Equal(t, key, gateways[0].Key)
+	}
+}
+
 func TestTopUpInfoHidesEpayMethodsWithoutEnabledGateway(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	previousAddress := operation_setting.PayAddress

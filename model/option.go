@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"maps"
 	"strconv"
 	"strings"
@@ -213,6 +214,14 @@ func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
+		if option.Key == operation_setting.EpayGatewaysOptionKey {
+			value, err := migrateEpayGatewayKeys(option.Value)
+			if err != nil {
+				common.SysError("failed to migrate Epay gateway keys: " + err.Error())
+			} else {
+				option.Value = value
+			}
+		}
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
 			continue
@@ -234,6 +243,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == configEncryptionSecretOptionKey {
+		return errors.New("configuration encryption key cannot be changed through options")
+	}
 	if key == legacyAccessTokenRetireAtKey {
 		return errLegacyRetireAtReadOnly
 	}
@@ -349,7 +361,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
-	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
+	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey || key == configEncryptionSecretOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
@@ -511,10 +523,13 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.EpayKey = value
 	case operation_setting.EpayGatewaysOptionKey:
 		gateways, parseErr := operation_setting.ParseEpayGateways(value)
-		if parseErr != nil {
+		if parseErr != nil && gateways == nil {
 			return parseErr
 		}
 		operation_setting.SetEpayGateways(gateways)
+		if parseErr != nil {
+			common.SysError(parseErr.Error())
+		}
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":

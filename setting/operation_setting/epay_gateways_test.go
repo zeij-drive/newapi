@@ -1,6 +1,7 @@
 package operation_setting
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,9 +10,9 @@ import (
 )
 
 func TestEpayGatewaysRoundTripEncryptsKeysAndHidesThemFromViews(t *testing.T) {
-	previousSecret := common.CryptoSecret
-	common.CryptoSecret = "epay-gateway-test-secret"
-	t.Cleanup(func() { common.CryptoSecret = previousSecret })
+	previousSecret := common.ConfigEncryptionSecret
+	common.ConfigEncryptionSecret = "epay-gateway-test-secret"
+	t.Cleanup(func() { common.ConfigEncryptionSecret = previousSecret })
 
 	gateways := []EpayGateway{
 		{
@@ -36,7 +37,7 @@ func TestEpayGatewaysRoundTripEncryptsKeysAndHidesThemFromViews(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, encoded, "primary-secret")
 	assert.NotContains(t, encoded, "backup-secret")
-	assert.Contains(t, encoded, "v1.")
+	assert.Contains(t, encoded, "v2.")
 
 	parsed, err := ParseEpayGateways(encoded)
 	require.NoError(t, err)
@@ -95,4 +96,42 @@ func TestEpayGatewaysRejectUnsafeCheckoutURLs(t *testing.T) {
 			require.Error(t, ValidateEpayGateways([]EpayGateway{{ID: "primary", Name: "Gateway", Address: address, MerchantID: "merchant", Key: "secret"}}))
 		})
 	}
+}
+
+func TestEpayGatewaysPreserveUnavailableKeysAndLoadOtherGateways(t *testing.T) {
+	previousSecret := common.ConfigEncryptionSecret
+	common.ConfigEncryptionSecret = "epay-recovery-test-secret"
+	t.Cleanup(func() { common.ConfigEncryptionSecret = previousSecret })
+	valid, err := common.EncryptWithCryptoSecret("working-merchant-secret")
+	require.NoError(t, err)
+	var stored []map[string]any
+	for index, key := range []string{"v1.unavailable", valid, "v3.unsupported", "v2.AA"} {
+		stored = append(stored, map[string]any{"id": fmt.Sprintf("gateway-%d", index), "name": "Gateway", "address": "https://pay.example.com", "merchant_id": "merchant", "key": key, "enabled": true})
+	}
+	encoded, err := common.Marshal(stored)
+	require.NoError(t, err)
+	parsed, err := ParseEpayGateways(string(encoded))
+	require.Error(t, err)
+	require.Len(t, parsed, 4)
+	assert.Equal(t, "working-merchant-secret", parsed[1].Key)
+	for _, index := range []int{0, 2, 3} {
+		assert.Empty(t, parsed[index].Key)
+		assert.False(t, EpayGatewayViews(parsed)[index].KeySet)
+		assert.Nil(t, FindEpayGateway(parsed, parsed[index].ID))
+		assert.Equal(t, stored[index]["key"], parsed[index].EncryptedKey)
+	}
+	assert.NotNil(t, FindEpayGateway(parsed, parsed[1].ID))
+	views, err := common.Marshal(EpayGatewayViews(parsed))
+	require.NoError(t, err)
+	assert.NotContains(t, string(views), "working-merchant-secret")
+	assert.NotContains(t, string(views), `"key":`)
+}
+
+func TestEpayGatewaysRequireInitializedEncryptionBeforeSavingSecrets(t *testing.T) {
+	previousSecret := common.ConfigEncryptionSecret
+	common.ConfigEncryptionSecret = ""
+	t.Cleanup(func() { common.ConfigEncryptionSecret = previousSecret })
+	encoded, err := EpayGateways2JsonString([]EpayGateway{{Key: "merchant-secret"}})
+	require.Error(t, err)
+	assert.Empty(t, encoded)
 }
