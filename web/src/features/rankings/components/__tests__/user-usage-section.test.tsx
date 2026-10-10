@@ -7,6 +7,7 @@ import { expect, test, vi } from 'vitest'
 import { api } from '@/lib/api'
 
 import type { UsageRankingSnapshot } from '../../api'
+import type { RankingPeriod } from '../../types'
 import { UserUsageSection } from '../user-usage-section'
 
 const rankedUsers: UsageRankingSnapshot['users'] = [
@@ -25,15 +26,17 @@ function rankingResponse(users = rankedUsers, total = 4_000_000) {
   }
 }
 
-function renderLeaderboard() {
+function renderLeaderboard(period: RankingPeriod = 'week') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <UserUsageSection />
-    </QueryClientProvider>
-  )
+  return render(<UserUsageSection period={period} />, {
+    wrapper: (props) => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    ),
+  })
 }
 
 test('switching the interface language updates token number formatting', async () => {
@@ -50,10 +53,16 @@ test('switching the interface language updates token number formatting', async (
   }
 })
 
-test('selecting a period shows its site total and user order', async () => {
-  const totals: Record<string, number> = { today: 10, week: 20, all: 30 }
+test('the page period controls user rankings and site totals without a separate filter', async () => {
+  const snapshots: Record<RankingPeriod, { total: number; name: string }> = {
+    today: { total: 10, name: 'Daily leader' },
+    week: { total: 20, name: 'Weekly leader' },
+    month: { total: 30, name: 'Monthly leader' },
+    year: { total: 40, name: 'Yearly leader' },
+  }
   vi.spyOn(api, 'get').mockImplementation(async (_url, config) => {
-    const period = String(config?.params?.period)
+    const period = config?.params?.period as RankingPeriod
+    const snapshot = snapshots[period]
     return {
       data: {
         success: true,
@@ -61,27 +70,30 @@ test('selecting a period shows its site total and user order', async () => {
           period,
           start: 0,
           end: 1,
-          total_tokens: totals[period] ?? 0,
-          users: [{ user_id: 3, name: 'User #3', total_tokens: 1 }],
+          total_tokens: snapshot.total,
+          users: [{ user_id: 3, name: snapshot.name, total_tokens: 1 }],
         },
       },
     }
   })
-  const user = userEvent.setup()
-  renderLeaderboard()
-
-  expect(await screen.findByText('20')).toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: 'Today' }))
-  expect(await screen.findByText('10')).toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: 'All time' }))
-  expect(await screen.findByText('30')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'All time' })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  )
+  const view = renderLeaderboard('month')
+  expect(await screen.findByText('Monthly leader')).toBeVisible()
+  expect(screen.getByText('30')).toBeVisible()
+  expect(
+    screen.queryByRole('group', { name: 'Period' })
+  ).not.toBeInTheDocument()
   expect(api.get).toHaveBeenCalledWith('/api/usage-ranking', {
-    params: { period: 'all' },
+    params: { period: 'month' },
   })
+
+  for (const period of ['today', 'year', 'week', 'month'] as const) {
+    view.rerender(<UserUsageSection period={period} />)
+    expect(await screen.findByText(snapshots[period].name)).toBeVisible()
+    expect(screen.getByText(String(snapshots[period].total))).toBeVisible()
+    expect(api.get).toHaveBeenCalledWith('/api/usage-ranking', {
+      params: { period },
+    })
+  }
 })
 
 test('the top three occupy the podium and the remaining list starts at fourth place', async () => {

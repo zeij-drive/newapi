@@ -1,36 +1,32 @@
 import { useQuery } from '@tanstack/react-query'
 import { Medal, Trophy } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { toIntlLocale } from '@/i18n/languages'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
-import { getUsageRanking, type UsageRankingPeriod } from '../api'
+import { getUsageRanking } from '../api'
 import { formatTokens } from '../lib/format'
+import type { RankingPeriod } from '../types'
 
-const periods: Array<{ value: UsageRankingPeriod; label: string }> = [
-  { value: 'today', label: 'Today' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-  { value: 'year', label: 'Year' },
-  { value: 'all', label: 'All time' },
-]
+type UserUsageSectionProps = {
+  period: RankingPeriod
+}
 
-export function UserUsageSection() {
+export function UserUsageSection(props: UserUsageSectionProps) {
   const { t, i18n } = useTranslation()
-  const [period, setPeriod] = useState<UsageRankingPeriod>('week')
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const ranking = useQuery({
-    queryKey: ['usage-ranking', period],
-    queryFn: async () => requireServerSuccess(await getUsageRanking(period)),
+    queryKey: ['usage-ranking', props.period],
+    queryFn: async () =>
+      requireServerSuccess(await getUsageRanking(props.period)),
     staleTime: 60_000,
   })
   const snapshot = ranking.data?.data
@@ -166,27 +162,7 @@ export function UserUsageSection() {
       className='flex flex-col gap-5'
       aria-label={t('User token leaderboard')}
     >
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <h2 className='text-xl font-semibold'>{t('User token leaderboard')}</h2>
-        <div
-          className='bg-muted/50 flex flex-wrap gap-1 rounded-lg p-1'
-          role='group'
-          aria-label={t('Period')}
-        >
-          {periods.map((item) => (
-            <Button
-              key={item.value}
-              type='button'
-              size='sm'
-              variant={period === item.value ? 'secondary' : 'ghost'}
-              aria-pressed={period === item.value}
-              onClick={() => setPeriod(item.value)}
-            >
-              {t(item.label)}
-            </Button>
-          ))}
-        </div>
-      </div>
+      <h2 className='text-xl font-semibold'>{t('User token leaderboard')}</h2>
       {snapshot && (
         <div className='flex flex-wrap items-center justify-between gap-3 border-y py-4'>
           <span className='text-muted-foreground text-sm font-medium'>
