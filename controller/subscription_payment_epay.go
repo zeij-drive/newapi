@@ -178,7 +178,7 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod {
+	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod || !epayCallbackMatchesOrder(client, params, order.Money) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -242,7 +242,7 @@ func SubscriptionEpayReturn(c *gin.Context) {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return
 	}
-	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod {
+	if verifyInfo.ServiceTradeNo != order.TradeNo || verifyInfo.Type != order.PaymentMethod || !epayCallbackMatchesOrder(client, params, order.Money) {
 		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
 		return
 	}

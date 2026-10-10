@@ -1,15 +1,21 @@
 package service
 
 import (
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func rankingTime(year int, month time.Month, day, hour int) time.Time {
@@ -39,6 +45,95 @@ func TestUsageRankingBounds(t *testing.T) {
 	require.Error(t, err)
 }
 
+// The configured DSNs must point to disposable databases containing no application data.
+func TestUsageRankingTotalsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var driver gorm.Dialector = sqlite.Open(":memory:")
+			if dialect != "sqlite" {
+				key := "TEST_USAGE_MYSQL_DSN"
+				if dialect == "postgres" {
+					key = "TEST_USAGE_POSTGRES_DSN"
+				}
+				dsn := os.Getenv(key)
+				if dsn == "" {
+					t.Skip(key + " is not configured")
+				}
+				if dialect == "mysql" {
+					driver = mysql.Open(dsn)
+				} else {
+					driver = postgres.Open(dsn)
+				}
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			previousDB := model.DB
+			model.DB = db
+			t.Cleanup(func() { model.DB = previousDB })
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.QuotaData{}))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&model.QuotaData{}, &model.User{})) })
+			versionQuery := "select version()"
+			if dialect == "sqlite" {
+				versionQuery = "select sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+			t.Logf("database: %s", version)
+
+			users := []model.User{
+				{Username: "ranking-total-a", DisplayName: "A", AffCode: "ranking-total-a"},
+				{Username: "ranking-total-b", DisplayName: "B", AffCode: "ranking-total-b"},
+				{Username: "ranking-total-c", AffCode: "ranking-total-c"},
+				{Username: "ranking-total-d", DisplayName: "D", AffCode: "ranking-total-d"},
+				{Username: "ranking-deleted", DisplayName: "Deleted", AffCode: "ranking-deleted"},
+			}
+			for i := range users {
+				require.NoError(t, db.Create(&users[i]).Error)
+			}
+			require.NoError(t, db.Delete(&users[4]).Error)
+			start, end := int64(1000), int64(2000)
+			usage := []model.QuotaData{
+				{UserID: users[0].Id, CreatedAt: start, ModelName: "model-a", TokenUsed: 4},
+				{UserID: users[0].Id, CreatedAt: end - 1, ModelName: "model-b", TokenUsed: 6},
+				{UserID: users[1].Id, CreatedAt: start, ModelName: "model-a", TokenUsed: 20},
+				{UserID: users[2].Id, CreatedAt: start, TokenUsed: 20},
+				{UserID: users[3].Id, CreatedAt: start, TokenUsed: 5},
+				{UserID: users[4].Id, CreatedAt: start, TokenUsed: 999},
+				{UserID: users[4].Id + 1, CreatedAt: start, TokenUsed: 1000},
+				{UserID: 0, CreatedAt: start, TokenUsed: 1000},
+				{UserID: users[0].Id, CreatedAt: start - 1, TokenUsed: 1000},
+				{UserID: users[0].Id, CreatedAt: end, TokenUsed: 1000},
+				{UserID: users[0].Id, CreatedAt: start, TokenUsed: 0},
+				{UserID: users[0].Id, CreatedAt: start, TokenUsed: -10},
+			}
+			require.NoError(t, db.Create(&usage).Error)
+			for _, limit := range []int{1, 3, 0} {
+				entries, total, err := model.QueryUsageRanking(start, end, limit)
+				require.NoError(t, err)
+				assert.Equal(t, int64(55), total, "the site total must include users beyond the displayed limit")
+				allEntries := []model.UsageRankingEntry{
+					{UserID: users[1].Id, Name: "B", TotalTokens: 20},
+					{UserID: users[2].Id, Name: fmt.Sprintf("User #%d", users[2].Id), TotalTokens: 20},
+					{UserID: users[0].Id, Name: "A", TotalTokens: 10},
+					{UserID: users[3].Id, Name: "D", TotalTokens: 5},
+				}
+				if limit > 0 {
+					allEntries = allEntries[:limit]
+				}
+				assert.Equal(t, allEntries, entries)
+			}
+			entries, total, err := model.QueryUsageRanking(end+1, end+2, 20)
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+			assert.Zero(t, total)
+		})
+	}
+}
+
 func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 	db := model.DB
 	require.NoError(t, db.AutoMigrate(&model.QuotaData{}, &model.UsageRankingAward{}, &model.UsageRankingSettlement{}))
@@ -51,8 +146,8 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 	})
 
 	users := []model.User{
-		{Username: "ranking-a", DisplayName: "A", Quota: 100},
-		{Username: "ranking-b", DisplayName: "B", Quota: 100},
+		{Username: "ranking-a", DisplayName: "A", AffCode: "ranking-a", Quota: 100},
+		{Username: "ranking-b", DisplayName: "B", AffCode: "ranking-b", Quota: 100},
 	}
 	for i := range users {
 		require.NoError(t, db.Create(&users[i]).Error)

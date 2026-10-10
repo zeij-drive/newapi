@@ -292,6 +292,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
+	if newAPIError = service.CheckJailbreakRequest(c); newAPIError != nil {
+		return nil, newAPIError
+	}
 	return channel, nil
 }
 
@@ -529,6 +532,10 @@ func executeTaskSubmissionWith(
 				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", channelErr.StatusCode)
 				break
 			}
+		}
+		if apiErr := service.CheckJailbreakRequest(c); apiErr != nil {
+			taskErr = service.TaskErrorWrapperLocal(apiErr.Err, string(apiErr.GetErrorCode()), apiErr.StatusCode)
+			break
 		}
 		diagnostics.attempt(retryParam.GetRetry()+1, channel, relayInfo.LockedChannel != nil)
 

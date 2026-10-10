@@ -20,18 +20,21 @@ For commercial licensing, please contact support@quantumnous.com
 // Rankings formatting helpers
 // ----------------------------------------------------------------------------
 
-/** Format a token count as `1.2B`, `42M`, `980K`, or `512`. */
-export function formatTokens(value: number): string {
+import i18next from 'i18next'
+
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
+
+/** Token notation uses 万 (10,000) and 亿 (100,000,000), capped at 亿. */
+export function formatTokens(
+  value: number,
+  locale = toIntlLocale(i18next.resolvedLanguage || i18next.language)
+): string {
   if (!Number.isFinite(value) || value <= 0) return '0'
-  if (value >= 1_000_000_000_000)
-    return `${(value / 1_000_000_000_000).toFixed(2)}T`
-  if (value >= 1_000_000_000)
-    return `${(value / 1_000_000_000).toFixed(value >= 10_000_000_000 ? 1 : 2)}B`
-  if (value >= 1_000_000)
-    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`
-  if (value >= 1_000)
-    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`
-  return value.toLocaleString()
+  if (value >= 99_999_950)
+    return `${formatNumber(value / 100_000_000, locale)}亿`
+  if (value >= 10_000) return `${formatNumber(value / 10_000, locale)}万`
+  return formatNumber(value, locale)
 }
 
 /** Format a 0..1 share as a percentage with two decimals. */

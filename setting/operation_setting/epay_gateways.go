@@ -3,6 +3,7 @@ package operation_setting
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -111,6 +112,10 @@ func ValidateEpayGateways(gateways []EpayGateway) error {
 		gateway.MerchantID = strings.TrimSpace(gateway.MerchantID)
 		if gateway.ID == "" || gateway.Name == "" || gateway.Address == "" || gateway.MerchantID == "" {
 			return fmt.Errorf("Epay 网关 #%d 缺少必填字段", i+1)
+		}
+		address, err := url.Parse(gateway.Address)
+		if err != nil || address.Host == "" || (address.Scheme != "https" && address.Scheme != "http") || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
+			return fmt.Errorf("Epay 网关 %q 地址必须是有效的 HTTP 或 HTTPS URL", gateway.Name)
 		}
 		if _, ok := seen[gateway.ID]; ok {
 			return errors.New("Epay 网关 ID 不能重复")

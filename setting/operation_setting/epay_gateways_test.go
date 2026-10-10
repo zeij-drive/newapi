@@ -88,3 +88,11 @@ func TestEpayGatewaysValidationRejectsDuplicateIDsAndMissingKeys(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "密钥")
 }
+
+func TestEpayGatewaysRejectUnsafeCheckoutURLs(t *testing.T) {
+	for _, address := range []string{"javascript:alert(1)", "//example.com", "https://user:secret@example.com", "https://example.com?key=secret", "https://example.com#fragment"} {
+		t.Run(address, func(t *testing.T) {
+			require.Error(t, ValidateEpayGateways([]EpayGateway{{ID: "primary", Name: "Gateway", Address: address, MerchantID: "merchant", Key: "secret"}}))
+		})
+	}
+}

@@ -3,17 +3,21 @@ package middleware
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -265,6 +269,76 @@ func TestNoAvailableChannelMessageWithoutPlugin(t *testing.T) {
 	generic := noAvailableChannelMessage(plain, "default", "gpt-4o")
 	assert.NotContains(t, generic, "task plugin")
 	assert.Contains(t, generic, "gpt-4o")
+}
+
+func TestJailbreakDistributionChecksRequestsWithoutBlockingChannelInitialization(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	previousMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	previousPolicy := maps.Clone(model.CurrentRequestPolicy().Options)
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = maps.Clone(previousPolicy)
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		require.NoError(t, model.UpdateRequestPolicyOptions(previousPolicy))
+		common.MemoryCacheEnabled = previousMemory
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+	var scans atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scans.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Jailbreak"},"finish_reason":"stop"}]}`))
+	}))
+	defer guard.Close()
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Name: "guard", Key: "test-secret", BaseURL: &guard.URL, Status: common.ChannelStatusEnabled, Models: "guard-test", Group: "default,allowed"}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities(model.DB))
+	user := model.User{Username: "guard-user", AffCode: "guard-user", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AuthVersion: 1}
+	require.NoError(t, model.DB.Create(&user).Error)
+	require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{
+		"JailbreakEnabled": "true", "JailbreakAllowedGroups": `["allowed"]`, "JailbreakChannelId": fmt.Sprint(channel.Id),
+		"JailbreakBanThreshold": "3", "JailbreakReplies": `["first","second","banned"]`,
+	}))
+	probe, _ := gin.CreateTestContext(httptest.NewRecorder())
+	probe.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	require.Nil(t, SetupContextForSelectedChannel(probe, &channel, "guard-test"))
+	assert.Zero(t, scans.Load(), "channel probes initialize before constructing their prompt")
+	for _, group := range []string{"default", "allowed"} {
+		t.Run(group, func(t *testing.T) {
+			forwarded := false
+			router := gin.New()
+			router.POST("/v1/chat/completions", func(c *gin.Context) {
+				c.Set("id", user.Id)
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
+				service.GetChannelConstraints(c).AddPin(hostdto.ChannelPin{ChannelId: channel.Id, Source: hostdto.PinSourceToken, Rank: hostdto.PinRankToken, RetryMode: hostdto.PinRetrySingleAttempt})
+				defer common.CleanupBodyStorage(c)
+				c.Next()
+			}, Distribute(), func(c *gin.Context) {
+				forwarded = true
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"guard-test","messages":[{"role":"user","content":"inspect me"}]}`))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if group == "default" {
+				assert.Equal(t, http.StatusForbidden, recorder.Code)
+				assert.Contains(t, recorder.Body.String(), "first")
+				assert.False(t, forwarded)
+			} else {
+				assert.Equal(t, http.StatusNoContent, recorder.Code)
+				assert.True(t, forwarded)
+			}
+		})
+	}
+	assert.EqualValues(t, 1, scans.Load())
+	require.NoError(t, model.DB.First(&user, user.Id).Error)
+	assert.Equal(t, 1, user.JailbreakCount)
 }
 
 func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {

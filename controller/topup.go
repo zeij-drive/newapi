@@ -219,6 +219,29 @@ func getEpayClientForStoredGateway(gatewayID string) *epay.Client {
 	return nil
 }
 
+// A valid signature alone does not bind the payment to the ordered amount or
+// merchant. Compare against the exact two-decimal amount sent at checkout.
+func epayCallbackMatchesOrder(client *epay.Client, params map[string]string, money float64) bool {
+	if params["pid"] == "" || params["pid"] != client.Config.PartnerID {
+		return false
+	}
+	amount := params["money"]
+	if amount == "" || len(amount) > 32 {
+		return false
+	}
+	for _, character := range amount {
+		if (character < '0' || character > '9') && character != '.' {
+			return false
+		}
+	}
+	paid, err := decimal.NewFromString(amount)
+	if err != nil || !paid.IsPositive() {
+		return false
+	}
+	expected, err := decimal.NewFromString(strconv.FormatFloat(money, 'f', 2, 64))
+	return err == nil && paid.Equal(expected)
+}
+
 func getPayMoney(amount int64, group string) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	// 充值金额以“展示类型”为准：
@@ -544,7 +567,7 @@ func EpayNotify(c *gin.Context) {
 		}
 		return
 	}
-	if verifyInfo.ServiceTradeNo != topUp.TradeNo || verifyInfo.Type != topUp.PaymentMethod {
+	if verifyInfo.ServiceTradeNo != topUp.TradeNo || verifyInfo.Type != topUp.PaymentMethod || !epayCallbackMatchesOrder(client, params, topUp.Money) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}

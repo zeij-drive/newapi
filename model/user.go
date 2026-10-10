@@ -85,6 +85,7 @@ type User struct {
 	DisplayName          string                     `json:"display_name" gorm:"index" validate:"max=20"`
 	Role                 int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status               int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	JailbreakCount       int                        `json:"-" gorm:"default:0"`
 	Email                string                     `json:"email" gorm:"index" validate:"max=50"`
 	GitHubId             string                     `json:"github_id" gorm:"column:github_id;index"`
 	DiscordId            string                     `json:"discord_id" gorm:"column:discord_id;index"`
@@ -833,8 +834,10 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 			return err
 		}
 	}
+	reenabled := current.Status == common.UserStatusDisabled && newUser.Status == common.UserStatusEnabled
 	if err = tx.Model(&current).Omit(
 		"access_token",
+		"jailbreak_count",
 		"quota",
 		"used_quota",
 		"request_count",
@@ -844,6 +847,11 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"auth_version",
 	).Updates(newUser).Error; err != nil {
 		return err
+	}
+	if reenabled {
+		if err = tx.Model(&current).UpdateColumn("jailbreak_count", 0).Error; err != nil {
+			return err
+		}
 	}
 	return tx.First(user, user.Id).Error
 }

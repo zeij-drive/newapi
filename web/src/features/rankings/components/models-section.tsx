@@ -21,19 +21,13 @@ import { BarChart3, Trophy } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { toIntlLocale } from '@/i18n/languages'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
 import { formatTokens } from '../lib/format'
 import type { ModelHistorySeries, ModelRanking, RankingPeriod } from '../types'
 import { ModelLeaderboard } from './model-leaderboard'
-
-const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
-  today: 'Hourly token usage by model across the last 24 hours',
-  week: 'Weekly token usage by model across the past few weeks',
-  month: 'Daily token usage by model across the past month',
-  year: 'Weekly token usage by model across the past year',
-}
 
 const TOOLTIP_MAX_ROWS = 10
 
@@ -49,7 +43,8 @@ type ModelsSectionProps = {
  * chart anchors the eye while the leaderboard provides the detailed key.
  */
 export function ModelsSection(props: ModelsSectionProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const { resolvedTheme, themeReady } = useChartTheme()
   const chartTextColor =
     resolvedTheme === 'dark'
@@ -71,11 +66,6 @@ export function ModelsSection(props: ModelsSectionProps) {
       return (order.get(a.model) ?? 999) - (order.get(b.model) ?? 999)
     })
   }, [props.history])
-
-  const totalTokens = useMemo(
-    () => props.rows.reduce((s, r) => s + r.total_tokens, 0),
-    [props.rows]
-  )
 
   const spec = useMemo(() => {
     if (orderedPoints.length === 0) return null
@@ -100,7 +90,8 @@ export function ModelsSection(props: ModelsSectionProps) {
         {
           orient: 'left',
           label: {
-            formatMethod: (val: number | string) => formatTokens(Number(val)),
+            formatMethod: (val: number | string) =>
+              formatTokens(Number(val), locale),
             style: { fill: chartTextColor, fontSize: 10 },
           },
           grid: {
@@ -116,7 +107,7 @@ export function ModelsSection(props: ModelsSectionProps) {
               key: (datum: Record<string, unknown>) =>
                 String(datum?.model ?? ''),
               value: (datum: Record<string, unknown>) =>
-                formatTokens(Number(datum?.tokens) || 0),
+                formatTokens(Number(datum?.tokens) || 0, locale),
             },
           ],
         },
@@ -142,7 +133,7 @@ export function ModelsSection(props: ModelsSectionProps) {
             const overflow = array.slice(TOOLTIP_MAX_ROWS)
             const result = visible.map((item) => ({
               key: item.key,
-              value: formatTokens(Number(item.value) || 0),
+              value: formatTokens(Number(item.value) || 0, locale),
             }))
             if (overflow.length > 0) {
               const otherSum = overflow.reduce(
@@ -151,17 +142,20 @@ export function ModelsSection(props: ModelsSectionProps) {
               )
               result.push({
                 key: t('+{{count}} more', { count: overflow.length }),
-                value: formatTokens(otherSum),
+                value: formatTokens(otherSum, locale),
               })
             }
-            result.unshift({ key: t('Total:'), value: formatTokens(sum) })
+            result.unshift({
+              key: t('Total:'),
+              value: formatTokens(sum, locale),
+            })
             return result
           },
         },
       },
       animationAppear: { duration: 500 },
     }
-  }, [chartGridColor, chartTextColor, orderedPoints, t])
+  }, [chartGridColor, chartTextColor, orderedPoints, t, locale])
 
   return (
     <section className='bg-card overflow-hidden rounded-lg border'>
@@ -172,17 +166,6 @@ export function ModelsSection(props: ModelsSectionProps) {
             <BarChart3 className='text-primary size-4' />
             {t('Top Models')}
           </h2>
-          <p className='text-muted-foreground mt-1 text-sm'>
-            {t(PERIOD_DESCRIPTIONS[props.period])}
-          </p>
-        </div>
-        <div className='shrink-0 text-right'>
-          <div className='text-foreground font-mono text-2xl font-semibold tabular-nums'>
-            {formatTokens(totalTokens)}
-          </div>
-          <div className='text-muted-foreground/80 text-[10px] font-medium tracking-widest uppercase'>
-            {t('tokens')}
-          </div>
         </div>
       </header>
 
@@ -213,9 +196,6 @@ export function ModelsSection(props: ModelsSectionProps) {
             <Trophy className='size-3.5 text-amber-500' />
             {t('LLM Leaderboard')}
           </h3>
-          <p className='text-muted-foreground/80 mt-0.5 text-xs'>
-            {t('Compare the most popular models on the platform')}
-          </p>
         </header>
         {props.rows.length === 0 ? (
           <div className='text-muted-foreground/80 px-5 py-8 text-center text-sm'>

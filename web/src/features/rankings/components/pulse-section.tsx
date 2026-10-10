@@ -45,7 +45,6 @@ export function PulseSection(props: PulseSectionProps) {
     <section className='grid grid-cols-1 gap-4 lg:grid-cols-2'>
       <PulseCard
         title={t('Trending up')}
-        description={t('Models climbing the leaderboard')}
         icon={<TrendingUp className='size-4 text-emerald-500' />}
       >
         {props.movers.length === 0 ? (
@@ -61,7 +60,6 @@ export function PulseSection(props: PulseSectionProps) {
 
       <PulseCard
         title={t('Trending down')}
-        description={t('Models losing positions')}
         icon={<TrendingDown className='size-4 text-rose-500' />}
       >
         {props.droppers.length === 0 ? (
@@ -80,7 +78,6 @@ export function PulseSection(props: PulseSectionProps) {
 
 function PulseCard(props: {
   title: string
-  description: string
   icon: React.ReactNode
   children: React.ReactNode
 }) {
@@ -91,9 +88,6 @@ function PulseCard(props: {
           {props.icon}
           {props.title}
         </h3>
-        <p className='text-muted-foreground/80 mt-0.5 text-xs'>
-          {props.description}
-        </p>
       </header>
       <div className='py-1'>{props.children}</div>
     </div>

@@ -19,10 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 import { createSectionRegistry } from '../utils/section-registry'
 import { ChannelHealthSection } from './channel-health-section'
 import type { RequestPolicySettings } from './defaults'
+import { JailbreakSection } from './jailbreak-section'
 import { RequestChecksSection } from './request-checks-section'
 import { RoutingPolicySection } from './routing-section'
 
 const POLICY_SECTIONS = [
+  {
+    id: 'jailbreak',
+    titleKey: 'Jailbreak protection',
+    build: (settings: RequestPolicySettings) => (
+      <JailbreakSection defaultValues={settings} />
+    ),
+  },
   {
     id: 'filtering',
     titleKey: 'Request checks',

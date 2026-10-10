@@ -50,19 +50,22 @@ func CompleteUsageRankingSettlement(period string, start, now int64) error {
 
 // QueryUsageRanking uses the same hourly usage facts as the existing model ranking.
 func QueryUsageRanking(start, end int64, limit int) ([]UsageRankingEntry, int64, error) {
-	base := DB.Table("quota_data").Where("created_at >= ? AND created_at < ? AND user_id > 0 AND token_used > 0", start, end)
+	// The site total includes all eligible users, regardless of the leaderboard limit.
+	eligibleUsers := DB.Model(&User{}).Select("id").Where("id > 0")
+	base := DB.Table("quota_data").
+		Where("created_at >= ? AND created_at < ? AND token_used > 0", start, end).
+		Where("user_id IN (?)", eligibleUsers)
 	var total struct{ TotalTokens int64 }
-	if err := base.Select("COALESCE(SUM(token_used), 0) AS total_tokens").Scan(&total).Error; err != nil {
+	if err := base.Session(&gorm.Session{}).Select("COALESCE(SUM(token_used), 0) AS total_tokens").Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []struct {
 		UserID      int
 		TotalTokens int64
 	}
-	query := DB.Table("quota_data").Joins("JOIN users ON users.id = quota_data.user_id").
-		Where("quota_data.created_at >= ? AND quota_data.created_at < ? AND quota_data.token_used > 0", start, end).
-		Select("quota_data.user_id, SUM(quota_data.token_used) AS total_tokens").
-		Group("quota_data.user_id").Order("total_tokens DESC, quota_data.user_id ASC")
+	query := base.Session(&gorm.Session{}).
+		Select("user_id, SUM(token_used) AS total_tokens").
+		Group("user_id").Order("total_tokens DESC, user_id ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

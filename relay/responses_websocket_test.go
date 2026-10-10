@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -557,6 +558,51 @@ func TestResponsesWSMessageSizeLimit(t *testing.T) {
 		t.Fatal("websocket request did not exit after oversized message")
 	}
 	assert.False(t, admitted.Load())
+}
+
+func TestResponsesWSWrappedInputReplacesAdmissionBodyCache(t *testing.T) {
+	client, server, cleanup := newTestWebSocketPair(t)
+	defer cleanup()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	var cachedContext *gin.Context
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ResponsesWebSocketHelper(c, server, func(request *http.Request, _ string, call func(*gin.Context) *types.NewAPIError) *types.NewAPIError {
+			admitted, _ := gin.CreateTestContext(httptest.NewRecorder())
+			admitted.Request = request
+			_, err := common.GetBodyStorage(admitted)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest)
+			}
+			cachedContext = admitted
+			defer common.CleanupBodyStorage(admitted)
+			// The empty model stops before channel selection, after normalization.
+			apiErr := call(admitted)
+			storage, err := common.GetBodyStorage(admitted)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest)
+			}
+			data, err := io.ReadAll(storage)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest)
+			}
+			assert.JSONEq(t, `{"input":"inspect me"}`, string(data), "policy checks must receive wrapped response input")
+			return apiErr
+		})
+	}()
+	require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","response":{"input":"inspect me"}}`)))
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, _, err := client.ReadMessage()
+	require.NoError(t, err)
+	require.NoError(t, client.Close())
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not stop")
+	}
+	require.NotNil(t, cachedContext)
 }
 
 func TestResponsesWSShutdownInterruptsBusyWriter(t *testing.T) {

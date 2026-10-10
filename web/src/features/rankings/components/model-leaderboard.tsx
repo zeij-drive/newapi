@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
+import { toIntlLocale } from '@/i18n/languages'
 import { getLobeIcon } from '@/lib/lobe-icon'
 
 import { formatTokens } from '../lib/format'
@@ -66,7 +67,8 @@ function ModelList(props: {
   rows: ModelRanking[]
   variant: 'default' | 'compact'
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const compact = props.variant === 'compact'
   return (
     <ul>
@@ -117,7 +119,7 @@ function ModelList(props: {
                   : 'text-foreground font-mono text-sm font-semibold tabular-nums'
               }
             >
-              {formatTokens(row.total_tokens)}
+              {formatTokens(row.total_tokens, locale)}
               {!compact && (
                 <>
                   {' '}

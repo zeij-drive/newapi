@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -28,6 +29,7 @@ type RequestPolicySnapshot struct {
 	DisableCodes    []operation_setting.StatusCodeRange
 	DisableKeywords []string
 	CheckText       bool
+	Jailbreak       JailbreakPolicy
 	TextKeywords    []string
 	AutoDisable     bool
 	Options         map[string]string
@@ -59,6 +61,12 @@ func requestPolicyDefaultOptions() map[string]string {
 	defaults["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	defaults["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	defaults["SensitiveWords"] = setting.SensitiveWordsToString()
+	defaults["JailbreakEnabled"] = "false"
+	defaults["JailbreakAllowedGroups"] = "[]"
+	defaults["JailbreakChannelId"] = "0"
+	defaults["JailbreakModel"] = "Qwen3Guard-Gen-0.6B"
+	defaults["JailbreakBanThreshold"] = "3"
+	defaults["JailbreakReplies"] = `["检测到破甲请求，已拦截。","再次检测到破甲请求，请停止尝试。","破甲拦截次数已达上限，账号已被禁用。"]`
 	defaults["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	defaults["ChannelDisableThreshold"] = strconv.FormatFloat(common.ChannelDisableThreshold, 'f', -1, 64)
 	return defaults
@@ -69,6 +77,8 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
+	case "JailbreakEnabled", "JailbreakAllowedGroups", "JailbreakChannelId", "JailbreakModel", "JailbreakBanThreshold", "JailbreakReplies":
+		return true
 	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
 		return true
 	}
@@ -98,6 +108,11 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 	}
 	maps.Copy(raw, options)
 	snapshot := &RequestPolicySnapshot{Options: raw}
+	var jailbreakErr error
+	snapshot.Jailbreak, jailbreakErr = buildJailbreakPolicy(raw)
+	if jailbreakErr != nil {
+		return nil, jailbreakErr
+	}
 	affinityFields := map[string]string{}
 	for key, value := range raw {
 		if field, ok := strings.CutPrefix(key, "channel_affinity_setting."); ok {
@@ -233,6 +248,12 @@ func UpdateRequestPolicyOptions(values map[string]string) error {
 	snapshot, err := BuildRequestPolicy(options)
 	if err != nil {
 		return err
+	}
+	if snapshot.Jailbreak.Enabled {
+		channel, err := GetChannelById(snapshot.Jailbreak.ChannelID, false)
+		if err != nil || channel.Type != constant.ChannelTypeOpenAI || channel.Status != common.ChannelStatusEnabled {
+			return fmt.Errorf("select an enabled OpenAI channel for jailbreak detection")
+		}
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		for key, value := range values {

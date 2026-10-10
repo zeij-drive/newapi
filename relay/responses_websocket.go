@@ -215,6 +215,10 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		if parseErr != nil {
 			return newResponsesWSInvalidRequestError(parseErr)
 		}
+		// The limiter may have cached the WebSocket envelope. Subsequent request
+		// checks must inspect the normalized HTTP body, including wrapped input.
+		common.CleanupBodyStorage(c)
+		c.Set(common.KeyRequestBody, create.Body)
 		c.Request.Body = io.NopCloser(bytes.NewReader(create.Body))
 		c.Request.ContentLength = int64(len(create.Body))
 		return s.runCall(c, state, create)
@@ -933,6 +937,9 @@ func selectResponsesWSChannel(c *gin.Context, modelName string, retryParam *serv
 		return nil, types.NewErrorWithStatusCode(errors.New(message), code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
 	}
 	if err := middleware.SetupContextForSelectedChannel(c, channel, modelName); err != nil {
+		return nil, err
+	}
+	if err := service.CheckJailbreakRequest(c); err != nil {
 		return nil, err
 	}
 	return channel, nil

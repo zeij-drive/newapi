@@ -44,7 +44,17 @@ export type FilteringSettings = Pick<
 export type RequestPolicySettings = RetrySettings &
   HealthSettings &
   FilteringSettings &
+  JailbreakSettings &
   Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings>
+
+export type JailbreakSettings = {
+  JailbreakEnabled: boolean
+  JailbreakAllowedGroups: string[]
+  JailbreakChannelId: number
+  JailbreakModel: string
+  JailbreakBanThreshold: number
+  JailbreakReplies: string[]
+}
 
 export const defaultRequestPolicySettings: RequestPolicySettings = {
   RetryTimes: 0,
@@ -69,4 +79,14 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   CheckSensitiveEnabled: false,
   CheckSensitiveOnPromptEnabled: false,
   SensitiveWords: '',
+  JailbreakEnabled: false,
+  JailbreakAllowedGroups: [],
+  JailbreakChannelId: 0,
+  JailbreakModel: 'Qwen3Guard-Gen-0.6B',
+  JailbreakBanThreshold: 3,
+  JailbreakReplies: [
+    'Jailbreak request blocked.',
+    'Jailbreak request blocked.',
+    'Account disabled after repeated jailbreak attempts.',
+  ],
 }

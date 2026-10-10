@@ -22,6 +22,9 @@ import (
 // provide the current request body through BodyStorage or BillingRequestInput;
 // channel retries retain the resulting billing session and pricing snapshot.
 func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	if apiErr := service.CheckJailbreakRequest(c); apiErr != nil {
+		return apiErr
+	}
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	meta := &types.TokenCountMeta{TokenType: types.TokenTypeTokenizer}
 	if info.Request != nil && (needSensitiveCheck || constant.CountToken) {

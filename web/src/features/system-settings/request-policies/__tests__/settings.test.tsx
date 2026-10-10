@@ -58,7 +58,7 @@ function optionsResponse() {
     success: true,
     data: Object.entries(settings).map(([key, value]) => ({
       key,
-      value: String(value),
+      value: Array.isArray(value) ? JSON.stringify(value) : String(value),
     })),
   }
 }
@@ -148,6 +148,8 @@ beforeEach(() => {
     },
   })
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/group/')
+      return { data: { success: true, data: ['default', 'allowed'] } }
     if (url === '/api/option/') return { data: optionsResponse() }
     if (url === '/api/option/request_policy') {
       return {
@@ -157,7 +159,7 @@ beforeEach(() => {
             options: Object.fromEntries(
               Object.entries(settings).map(([key, value]) => [
                 key,
-                String(value),
+                Array.isArray(value) ? JSON.stringify(value) : String(value),
               ])
             ),
           },
@@ -187,6 +189,92 @@ afterEach(() => {
 })
 
 describe('request policy settings', () => {
+  it('failed group loading can retry without losing custom jailbreak replies', async () => {
+    const originalGet = vi.mocked(api.get).getMockImplementation()!
+    let groupFailed = false
+    vi.mocked(api.get).mockImplementation(async (url, config) => {
+      if (url === '/api/group/' && !groupFailed) {
+        groupFailed = true
+        throw new Error('offline')
+      }
+      return originalGet(url, config)
+    })
+    await renderPolicies('/system-settings/request-policies/jailbreak')
+    expect(await screen.findByText('Failed to load groups')).toBeVisible()
+    const reply = screen.getByRole('textbox', {
+      name: 'Reply for interception 1',
+    })
+    fireEvent.change(reply, { target: { value: 'Keep this reply' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Failed to load groups')
+      ).not.toBeInTheDocument()
+    )
+    expect(reply).toHaveValue('Keep this reply')
+  })
+  it('changing the jailbreak ban threshold shows and saves exactly one reply per interception', async () => {
+    await renderPolicies('/system-settings/request-policies/jailbreak')
+    const threshold = await screen.findByRole('spinbutton', {
+      name: 'Ban after interceptions',
+    })
+    expect(
+      screen.getAllByRole('textbox', { name: /Reply for interception/ })
+    ).toHaveLength(3)
+    fireEvent.change(threshold, { target: { value: '2' } })
+    const replies = screen.getAllByRole('textbox', {
+      name: /Reply for interception/,
+    })
+    expect(replies).toHaveLength(2)
+    fireEvent.change(replies[0], { target: { value: 'Custom first reply' } })
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save jailbreak settings' })
+    )
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+        options: {
+          JailbreakEnabled: 'false',
+          JailbreakAllowedGroups: '[]',
+          JailbreakChannelId: '0',
+          JailbreakModel: 'Qwen3Guard-Gen-0.6B',
+          JailbreakBanThreshold: '2',
+          JailbreakReplies:
+            '["Custom first reply","Jailbreak request blocked."]',
+        },
+      })
+    )
+  })
+
+  it('an enabled jailbreak policy cannot save without a detection channel', async () => {
+    await renderPolicies('/system-settings/request-policies/jailbreak')
+    await userEvent.click(
+      await screen.findByRole('switch', { name: 'Enable jailbreak detection' })
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save jailbreak settings' })
+    )
+    expect(await screen.findByText('Select a detection channel')).toBeVisible()
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('an invalid jailbreak ban threshold cannot save', async () => {
+    await renderPolicies('/system-settings/request-policies/jailbreak')
+    fireEvent.change(
+      await screen.findByRole('spinbutton', {
+        name: 'Ban after interceptions',
+      }),
+      { target: { value: '0' } }
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save jailbreak settings' })
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('spinbutton', { name: 'Ban after interceptions' })
+      ).toHaveAttribute('aria-invalid', 'true')
+    )
+    expect(api.patch).not.toHaveBeenCalled()
+  })
   it.each([
     ['retry', 'Save Changes'],
     ['health', 'Save Changes'],

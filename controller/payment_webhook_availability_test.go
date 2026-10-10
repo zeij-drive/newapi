@@ -1,17 +1,97 @@
 package controller
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func TestEpayCallbackRequiresOrderedAmountAndMerchant(t *testing.T) {
+	client, err := epay.NewClient(&epay.Config{PartnerID: "merchant", Key: "secret"}, "https://pay.example.com")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		amount, merchant string
+		valid            bool
+	}{
+		{"12.30", "merchant", true}, {"12.3", "merchant", true}, {"12.300", "merchant", true},
+		{"0.01", "merchant", false}, {"12.301", "merchant", false}, {"", "merchant", false},
+		{"12.30", "other", false}, {"12.30", "", false}, {"1.23e1", "merchant", false},
+		{"-12.30", "merchant", false}, {"NaN", "merchant", false}, {"12.30 ", "merchant", false},
+	} {
+		t.Run(tc.amount+"/"+tc.merchant, func(t *testing.T) {
+			assert.Equal(t, tc.valid, epayCallbackMatchesOrder(client, map[string]string{"money": tc.amount, "pid": tc.merchant}, 12.30))
+		})
+	}
+	assert.False(t, epayCallbackMatchesOrder(client, map[string]string{"money": "12.30", "pid": "merchant"}, math.NaN()))
+}
+
+func TestEpaySignedUnderpaymentCannotCompleteTopupOrSubscription(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldGateways := operation_setting.GetEpayGateways()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	model.DB, model.LOG_DB = db, db
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		operation_setting.SetEpayGateways(oldGateways)
+		require.NoError(t, sqlDB.Close())
+	})
+	require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.SubscriptionOrder{}))
+	operation_setting.SetEpayGateways([]operation_setting.EpayGateway{{ID: "primary", Name: "Gateway", Address: "https://pay.example.com", MerchantID: "merchant", Key: "secret", Enabled: true}})
+	topup := model.TopUp{TradeNo: "topup-order", Money: 12.30, Amount: 100, PaymentGateway: "primary", PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay, Status: common.TopUpStatusPending}
+	order := model.SubscriptionOrder{TradeNo: "subscription-order", Money: 12.30, PaymentGateway: "primary", PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay, Status: common.TopUpStatusPending}
+	require.NoError(t, db.Create(&topup).Error)
+	require.NoError(t, db.Create(&order).Error)
+	for _, tc := range []struct {
+		name, tradeNo string
+		handler       gin.HandlerFunc
+		browser       bool
+	}{
+		{"topup", topup.TradeNo, EpayNotify, false}, {"subscription notify", order.TradeNo, SubscriptionEpayNotify, false}, {"subscription return", order.TradeNo, SubscriptionEpayReturn, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, signed := range []map[string]string{{"money": "0.01", "pid": "merchant"}, {"money": "12.30", "pid": "other"}} {
+				signed["out_trade_no"], signed["type"], signed["trade_status"] = tc.tradeNo, "alipay", epay.StatusTradeSuccess
+				params := epay.GenerateParams(signed, "secret")
+				query := url.Values{}
+				for key, value := range params {
+					query.Set(key, value)
+				}
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodGet, "/callback?"+query.Encode(), nil)
+				tc.handler(c)
+				if tc.browser {
+					assert.Contains(t, recorder.Header().Get("Location"), "pay=fail")
+				} else {
+					assert.Equal(t, "fail", recorder.Body.String())
+				}
+			}
+		})
+	}
+	require.NoError(t, db.First(&topup, topup.Id).Error)
+	require.NoError(t, db.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusPending, topup.Status)
+	assert.Equal(t, common.TopUpStatusPending, order.Status)
+}
 
 func confirmPaymentComplianceForTest(t *testing.T) {
 	t.Helper()

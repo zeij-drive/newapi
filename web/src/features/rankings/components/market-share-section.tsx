@@ -21,19 +21,13 @@ import { PieChart } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { toIntlLocale } from '@/i18n/languages'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
 import { formatShare, formatTokens } from '../lib/format'
 import type { RankingPeriod, VendorRanking, VendorShareSeries } from '../types'
 import { VendorLink } from './entity-links'
-
-const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
-  today: 'Token share by model author across the last 24 hours',
-  week: 'Token share by model author across the past few weeks',
-  month: 'Token share by model author across the past month',
-  year: 'Token share by model author across the past year',
-}
 
 /** Stable colour palette for vendors, used in both the share chart and the
  * legend dots. Falls back to a neutral palette for unknown vendors so that
@@ -101,7 +95,8 @@ type MarketShareSectionProps = {
  * vendor list.
  */
 export function MarketShareSection(props: MarketShareSectionProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const { resolvedTheme, themeReady } = useChartTheme()
   const chartTextColor =
     resolvedTheme === 'dark'
@@ -172,7 +167,7 @@ export function MarketShareSection(props: MarketShareSectionProps) {
               key: (datum: Record<string, unknown>) =>
                 String(datum?.vendor ?? ''),
               value: (datum: Record<string, unknown>) =>
-                `${(Number(datum?.share) * 100).toFixed(1)}% · ${formatTokens(Number(datum?.tokens) || 0)}`,
+                `${(Number(datum?.share) * 100).toFixed(1)}% · ${formatTokens(Number(datum?.tokens) || 0, locale)}`,
             },
           ],
         },
@@ -204,7 +199,7 @@ export function MarketShareSection(props: MarketShareSectionProps) {
       },
       animationAppear: { duration: 500 },
     }
-  }, [chartGridColor, chartTextColor, colourMap, orderedPoints])
+  }, [chartGridColor, chartTextColor, colourMap, orderedPoints, locale])
 
   const visible = props.rows.slice(0, MAX_VENDORS_IN_LIST)
   const half = Math.ceil(visible.length / 2)
@@ -219,9 +214,6 @@ export function MarketShareSection(props: MarketShareSectionProps) {
           <PieChart className='text-primary size-4' />
           {t('Market Share')}
         </h2>
-        <p className='text-muted-foreground mt-1 text-sm'>
-          {t(PERIOD_DESCRIPTIONS[props.period])}
-        </p>
       </header>
 
       <div className='px-5 pb-5'>
@@ -250,9 +242,6 @@ export function MarketShareSection(props: MarketShareSectionProps) {
           <h3 className='text-foreground text-sm font-semibold'>
             {t('By model author')}
           </h3>
-          <p className='text-muted-foreground/80 mt-0.5 text-xs'>
-            {t('Vendors ranked by aggregated token volume')}
-          </p>
         </header>
         {visible.length === 0 ? (
           <div className='text-muted-foreground/80 px-5 py-8 text-center text-sm'>
@@ -275,6 +264,8 @@ function VendorList(props: {
   rows: VendorRanking[]
   colourMap: Record<string, string>
 }) {
+  const { i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   return (
     <ul>
       {props.rows.map((vendor) => (
@@ -297,7 +288,7 @@ function VendorList(props: {
           </VendorLink>
           <div className='shrink-0 text-right'>
             <div className='text-foreground font-mono text-sm font-semibold tabular-nums'>
-              {formatTokens(vendor.total_tokens)}
+              {formatTokens(vendor.total_tokens, locale)}
             </div>
             <div className='text-muted-foreground/80 font-mono text-[11px] tabular-nums'>
               {formatShare(vendor.share)}
