@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { getUsageRanking } from '../api'
 import { formatTokens } from '../lib/format'
 import type { RankingPeriod } from '../types'
+import { UsageRankingRewards } from './usage-ranking-rewards'
 
 type UserUsageSectionProps = {
   period: RankingPeriod
@@ -173,6 +174,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
           </strong>
         </div>
       )}
+      {snapshot?.reward && <UsageRankingRewards reward={snapshot.reward} />}
       {content}
     </section>
   )

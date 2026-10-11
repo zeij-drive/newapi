@@ -45,6 +45,22 @@ func TestUsageRankingBounds(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNextUsageRankingRewardWindowRespectsActivationAndSettlement(t *testing.T) {
+	setting := operation_setting.UsageRankingRewards{
+		Enabled:   true,
+		EnabledAt: rankingTime(2026, time.October, 6, 13).Unix(),
+	}
+	start, end, err := nextUsageRankingRewardWindow("week", setting, 0)
+	require.NoError(t, err)
+	assert.Equal(t, rankingTime(2026, time.October, 12, 0), start)
+	assert.Equal(t, rankingTime(2026, time.October, 19, 0), end)
+
+	start, end, err = nextUsageRankingRewardWindow("week", setting, start.Unix())
+	require.NoError(t, err)
+	assert.Equal(t, rankingTime(2026, time.October, 19, 0), start)
+	assert.Equal(t, rankingTime(2026, time.October, 26, 0), end)
+}
+
 // The configured DSNs must point to disposable databases containing no application data.
 func TestUsageRankingTotalsDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
@@ -181,8 +197,11 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 	common.OptionMapRWMutex.Unlock()
 	previousExport := common.DataExportEnabled
 	common.DataExportEnabled = true
+	previousExportInterval := common.DataExportInterval
+	common.DataExportInterval = 5
 	t.Cleanup(func() {
 		common.DataExportEnabled = previousExport
+		common.DataExportInterval = previousExportInterval
 		common.OptionMapRWMutex.Lock()
 		if previousMap == nil {
 			common.OptionMap = nil
@@ -193,6 +212,43 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 		}
 		common.OptionMapRWMutex.Unlock()
 	})
+
+	dailySnapshot, err := GetUsageRanking("today", rankingTime(2026, time.October, 6, 13))
+	require.NoError(t, err)
+	require.NotNil(t, dailySnapshot.Reward)
+	assert.True(t, dailySnapshot.Reward.Eligible)
+	assert.Equal(t, rankingTime(2026, time.October, 6, 0).Unix(), dailySnapshot.Reward.PeriodStart)
+	assert.Equal(t, rankingTime(2026, time.October, 7, 0).Unix(), dailySnapshot.Reward.PeriodEnd)
+	assert.Equal(t, rankingTime(2026, time.October, 7, 0).Add(10*time.Minute).Unix(), dailySnapshot.Reward.SettlementAt)
+	require.Len(t, dailySnapshot.Reward.Recipients, 2)
+	assert.Equal(t, UsageRankingRewardRecipient{UserID: users[0].Id, Name: "A", Rank: 1, Quota: int(common.QuotaPerUnit)}, dailySnapshot.Reward.Recipients[0])
+	assert.Equal(t, UsageRankingRewardRecipient{UserID: users[1].Id, Name: "B", Rank: 2, Quota: int(common.QuotaPerUnit / 2)}, dailySnapshot.Reward.Recipients[1])
+
+	ineligibleSetting := operation_setting.UsageRankingRewards{
+		Enabled:   true,
+		EnabledAt: rankingTime(2026, time.October, 6, 13).Unix(),
+		Daily:     [3]string{"1.00", "0.50", ""},
+	}
+	ineligibleEncoded, err := common.Marshal(ineligibleSetting)
+	require.NoError(t, err)
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[key] = string(ineligibleEncoded)
+	common.OptionMapRWMutex.Unlock()
+	ineligibleSnapshot, err := GetUsageRanking("today", rankingTime(2026, time.October, 6, 13))
+	require.NoError(t, err)
+	require.NotNil(t, ineligibleSnapshot.Reward)
+	assert.False(t, ineligibleSnapshot.Reward.Eligible)
+	assert.Equal(t, rankingTime(2026, time.October, 7, 0).Unix(), ineligibleSnapshot.Reward.PeriodStart)
+	assert.Equal(t, rankingTime(2026, time.October, 8, 0).Add(10*time.Minute).Unix(), ineligibleSnapshot.Reward.SettlementAt)
+	assert.Empty(t, ineligibleSnapshot.Reward.Recipients, "users in a period before activation must not be shown as reward recipients")
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[key] = string(encoded)
+	common.OptionMapRWMutex.Unlock()
+
+	allTimeSnapshot, err := GetUsageRanking("all", rankingTime(2026, time.October, 6, 13))
+	require.NoError(t, err)
+	assert.Nil(t, allTimeSnapshot.Reward, "all-time rankings do not have a reward settlement period")
 
 	now := rankingTime(2026, time.October, 8, 1)
 	require.NoError(t, settleUsageRankingRewards(now))

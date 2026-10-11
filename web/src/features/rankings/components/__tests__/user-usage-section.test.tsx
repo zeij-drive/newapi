@@ -5,6 +5,10 @@ import i18next from 'i18next'
 import { expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import {
+  DEFAULT_CURRENCY_CONFIG,
+  useSystemConfigStore,
+} from '@/stores/system-config-store'
 
 import type { UsageRankingSnapshot } from '../../api'
 import type { RankingPeriod } from '../../types'
@@ -26,6 +30,17 @@ function rankingResponse(users = rankedUsers, total = 4_000_000) {
   }
 }
 
+const rewardPreview: NonNullable<UsageRankingSnapshot['reward']> = {
+  eligible: true,
+  settlement_at: Date.UTC(2026, 9, 6, 16, 10) / 1000,
+  period_start: Date.UTC(2026, 9, 5, 16) / 1000,
+  period_end: Date.UTC(2026, 9, 6, 16) / 1000,
+  recipients: [
+    { user_id: 1, name: 'Champion', rank: 1, quota: 500_000 },
+    { user_id: 2, name: 'Runner up', rank: 2, quota: 250_000 },
+  ],
+}
+
 function renderLeaderboard(period: RankingPeriod = 'week') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -38,6 +53,75 @@ function renderLeaderboard(period: RankingPeriod = 'week') {
     ),
   })
 }
+
+test('the selected period shows estimated settlement time and each expected reward', async () => {
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: { ...rankingResponse().data.data, reward: rewardPreview },
+    },
+  })
+  renderLeaderboard('today')
+
+  const rewards = await screen.findByRole('region', {
+    name: 'Upcoming balance rewards',
+  })
+  expect(
+    within(rewards).getByText('Oct 7, 2026, 12:10 AM (UTC+8)')
+  ).toBeVisible()
+  expect(
+    within(rewards).getByText('Reward period: Oct 6, 2026–Oct 6, 2026')
+  ).toBeVisible()
+  expect(
+    within(rewards).getByRole('listitem', { name: 'Rank 1' })
+  ).toHaveTextContent('Champion')
+  expect(
+    within(rewards).getByRole('listitem', { name: 'Rank 1' })
+  ).toHaveTextContent('+$1')
+  expect(
+    within(rewards).getByRole('listitem', { name: 'Rank 2' })
+  ).toHaveTextContent('Runner up')
+  expect(
+    within(rewards).getByRole('listitem', { name: 'Rank 2' })
+  ).toHaveTextContent('+$0.5')
+  expect(api.get).toHaveBeenCalledWith('/api/usage-ranking', {
+    params: { period: 'today' },
+  })
+})
+
+test('the reward panel stays hidden when automatic rewards are disabled', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue(rankingResponse())
+  renderLeaderboard()
+
+  await screen.findByRole('list', { name: 'User token leaderboard' })
+  expect(
+    screen.queryByRole('region', { name: 'Upcoming balance rewards' })
+  ).not.toBeInTheDocument()
+})
+
+test('a period before reward activation lists no expected recipients', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        ...rankingResponse().data.data,
+        reward: { ...rewardPreview, eligible: false, recipients: [] },
+      },
+    },
+  })
+  renderLeaderboard()
+
+  const rewards = await screen.findByRole('region', {
+    name: 'Upcoming balance rewards',
+  })
+  expect(within(rewards).getByText('Rewards begin next period')).toBeVisible()
+  expect(
+    within(rewards).queryByRole('list', { name: 'Expected reward recipients' })
+  ).not.toBeInTheDocument()
+})
 
 test('switching the interface language updates token number formatting', async () => {
   vi.spyOn(api, 'get').mockResolvedValue(

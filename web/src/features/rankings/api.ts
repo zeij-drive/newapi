@@ -35,12 +35,26 @@ export async function getRankings(
 
 export type UsageRankingPeriod = RankingPeriod | 'all'
 
+export type UsageRankingRewardPreview = {
+  eligible: boolean
+  settlement_at: number
+  period_start: number
+  period_end: number
+  recipients: Array<{
+    user_id: number
+    name: string
+    rank: number
+    quota: number
+  }>
+}
+
 export type UsageRankingSnapshot = {
   period: UsageRankingPeriod
   start: number
   end: number
   total_tokens: number
   users: Array<{ user_id: number; name: string; total_tokens: number }>
+  reward?: UsageRankingRewardPreview
 }
 
 export async function getUsageRanking(period: UsageRankingPeriod) {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,11 +15,27 @@ import (
 )
 
 type UsageRankingSnapshot struct {
-	Period      string                    `json:"period"`
-	Start       int64                     `json:"start"`
-	End         int64                     `json:"end"`
-	TotalTokens int64                     `json:"total_tokens"`
-	Users       []model.UsageRankingEntry `json:"users"`
+	Period      string                     `json:"period"`
+	Start       int64                      `json:"start"`
+	End         int64                      `json:"end"`
+	TotalTokens int64                      `json:"total_tokens"`
+	Users       []model.UsageRankingEntry  `json:"users"`
+	Reward      *UsageRankingRewardPreview `json:"reward,omitempty"`
+}
+
+type UsageRankingRewardRecipient struct {
+	UserID int    `json:"user_id"`
+	Name   string `json:"name"`
+	Rank   int    `json:"rank"`
+	Quota  int    `json:"quota"`
+}
+
+type UsageRankingRewardPreview struct {
+	Eligible     bool                          `json:"eligible"`
+	SettlementAt int64                         `json:"settlement_at"`
+	PeriodStart  int64                         `json:"period_start"`
+	PeriodEnd    int64                         `json:"period_end"`
+	Recipients   []UsageRankingRewardRecipient `json:"recipients"`
 }
 
 func usageRankingBounds(period string, at time.Time) (time.Time, time.Time, error) {
@@ -55,7 +72,109 @@ func GetUsageRanking(period string, now time.Time) (*UsageRankingSnapshot, error
 	if err != nil {
 		return nil, err
 	}
-	return &UsageRankingSnapshot{Period: period, Start: start, End: end, TotalTokens: total, Users: users}, nil
+	reward, err := getUsageRankingRewardPreview(period, start, end, users)
+	if err != nil {
+		logger.LogWarn(context.Background(), fmt.Sprintf("usage ranking reward preview failed: %v", err))
+	}
+	return &UsageRankingSnapshot{Period: period, Start: start, End: end, TotalTokens: total, Users: users, Reward: reward}, nil
+}
+
+func nextUsageRankingRewardWindow(period string, setting operation_setting.UsageRankingRewards, lastStart int64) (time.Time, time.Time, error) {
+	start, end, err := usageRankingBounds(period, time.Unix(setting.EnabledAt, 0))
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if start.Unix() < setting.EnabledAt {
+		start, end, err = usageRankingBounds(period, end)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+	}
+	if lastStart >= start.Unix() {
+		_, lastEnd, boundsErr := usageRankingBounds(period, time.Unix(lastStart, 0))
+		if boundsErr != nil {
+			return time.Time{}, time.Time{}, boundsErr
+		}
+		start, end, err = usageRankingBounds(period, lastEnd)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+	}
+	return start, end, nil
+}
+
+func usageRankingRewardQuota(amount string) (int, bool, error) {
+	trimmed := strings.TrimSpace(amount)
+	if trimmed == "" {
+		return 0, false, nil
+	}
+	value, err := decimal.NewFromString(trimmed)
+	if err != nil {
+		return 0, false, err
+	}
+	if !value.IsPositive() {
+		return 0, false, nil
+	}
+	quota, err := common.WalletQuotaFromDecimalStrict(value.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	if err != nil {
+		return 0, false, err
+	}
+	if quota <= 0 {
+		return 0, false, fmt.Errorf("amount converts to zero quota")
+	}
+	return quota, true, nil
+}
+
+func buildUsageRankingRewardPreview(period string, setting operation_setting.UsageRankingRewards, start, end time.Time, users []model.UsageRankingEntry) (*UsageRankingRewardPreview, error) {
+	// Only complete periods after activation qualify, matching the settlement task.
+	eligible := start.Unix() >= setting.EnabledAt
+	if !eligible {
+		var err error
+		start, end, err = nextUsageRankingRewardWindow(period, setting, 0)
+		if err != nil {
+			return nil, err
+		}
+		users = nil
+	}
+	amounts := setting.Amounts(period)
+	recipients := make([]UsageRankingRewardRecipient, 0, min(len(users), 3))
+	for index, user := range users {
+		if index >= 3 {
+			break
+		}
+		quota, shouldReward, err := usageRankingRewardQuota(amounts[index])
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s ranking reward: %w", period, err)
+		}
+		if !shouldReward {
+			continue
+		}
+		recipients = append(recipients, UsageRankingRewardRecipient{
+			UserID: user.UserID, Name: user.Name, Rank: index + 1, Quota: quota,
+		})
+	}
+	settlementAt := end.Add(time.Duration(max(common.DataExportInterval, 10)) * time.Minute)
+	return &UsageRankingRewardPreview{
+		Eligible:     eligible,
+		SettlementAt: settlementAt.Unix(),
+		PeriodStart:  start.Unix(),
+		PeriodEnd:    end.Unix(),
+		Recipients:   recipients,
+	}, nil
+}
+
+func getUsageRankingRewardPreview(period string, start, end int64, users []model.UsageRankingEntry) (*UsageRankingRewardPreview, error) {
+	if period == "all" {
+		return nil, nil
+	}
+	setting, err := operation_setting.GetUsageRankingRewards()
+	if err != nil {
+		return nil, err
+	}
+	if !setting.Enabled || !common.DataExportEnabled {
+		return nil, nil
+	}
+	return buildUsageRankingRewardPreview(period, setting, time.Unix(start, 0), time.Unix(end, 0), users)
 }
 
 var usageRankingRewardOnce sync.Once
@@ -88,25 +207,9 @@ func settleUsageRankingRewards(now time.Time) error {
 		if err != nil {
 			return err
 		}
-		start, end, err := usageRankingBounds(period, time.Unix(setting.EnabledAt, 0))
+		start, end, err := nextUsageRankingRewardWindow(period, setting, lastStart)
 		if err != nil {
 			return err
-		}
-		if start.Unix() < setting.EnabledAt {
-			start, end, err = usageRankingBounds(period, end)
-			if err != nil {
-				return err
-			}
-		}
-		if lastStart >= start.Unix() {
-			_, lastEnd, boundsErr := usageRankingBounds(period, time.Unix(lastStart, 0))
-			if boundsErr != nil {
-				return boundsErr
-			}
-			start, end, err = usageRankingBounds(period, lastEnd)
-			if err != nil {
-				return err
-			}
 		}
 		amounts := setting.Amounts(period)
 		// Usage facts are flushed periodically and grouped by their starting hour.
@@ -117,22 +220,19 @@ func settleUsageRankingRewards(now time.Time) error {
 				return err
 			}
 			for index, user := range users {
-				amount, err := decimal.NewFromString(amounts[index])
-				if err != nil || !amount.IsPositive() {
-					continue
-				}
-				quota, err := common.WalletQuotaFromDecimalStrict(amount.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+				quota, shouldReward, err := usageRankingRewardQuota(amounts[index])
 				if err != nil {
 					return fmt.Errorf("invalid %s ranking reward: %w", period, err)
 				}
-				if quota <= 0 {
-					return fmt.Errorf("invalid %s ranking reward: amount converts to zero quota", period)
+				if !shouldReward {
+					continue
 				}
 				awarded, err := model.AwardUsageRanking(period, start.Unix(), index+1, user, quota, now.Unix())
 				if err != nil {
 					return err
 				}
 				if awarded {
+					amount, _ := decimal.NewFromString(strings.TrimSpace(amounts[index]))
 					model.RecordLog(user.UserID, model.LogTypeSystem, fmt.Sprintf("%s token usage ranking #%d reward: %s USD", period, index+1, amount.StringFixed(2)))
 				}
 			}
