@@ -31,6 +31,7 @@ function rankingResponse(users = rankedUsers, total = 4_000_000) {
 }
 
 const rewardPreview: NonNullable<UsageRankingSnapshot['reward']> = {
+  configured: true,
   eligible: true,
   settlement_at: Date.UTC(2026, 9, 6, 16, 10) / 1000,
   period_start: Date.UTC(2026, 9, 5, 16) / 1000,
@@ -118,6 +119,30 @@ test('a period before reward activation lists no expected recipients', async () 
     name: 'Upcoming balance rewards',
   })
   expect(within(rewards).getByText('Rewards begin next period')).toBeVisible()
+  expect(
+    within(rewards).queryByRole('list', { name: 'Expected reward recipients' })
+  ).not.toBeInTheDocument()
+})
+
+test('a period without configured reward amounts shows that rewards are not enabled', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        ...rankingResponse().data.data,
+        reward: { ...rewardPreview, configured: false, recipients: [] },
+      },
+    },
+  })
+  renderLeaderboard()
+
+  const rewards = await screen.findByRole('region', {
+    name: 'Upcoming balance rewards',
+  })
+  expect(
+    within(rewards).getByText('Rewards are not enabled for this period yet')
+  ).toBeVisible()
+  expect(within(rewards).queryByText('Estimated settlement:')).toBeNull()
   expect(
     within(rewards).queryByRole('list', { name: 'Expected reward recipients' })
   ).not.toBeInTheDocument()

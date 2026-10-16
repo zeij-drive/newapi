@@ -5164,6 +5164,7 @@
     "Revoked access tokens": "Jetons d’accès révoqués",
     "Revoked an access token": "Jeton d’accès révoqué",
     "Reward period: {{start}}–{{end}}": "Période de récompense : {{start}}–{{end}}",
+    "Rewards are not enabled for this period yet": "Les récompenses ne sont pas encore activées pour cette période",
     "Rewards are sent after each completed period (UTC+8).": "Les récompenses sont versées à la fin de chaque période (UTC+8).",
     "Rewards begin next period": "Les récompenses commenceront à la prochaine période",
     "Rewards will be added directly to your balance": "Les récompenses seront ajoutées directement à votre solde",

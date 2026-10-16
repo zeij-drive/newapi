@@ -5164,6 +5164,7 @@
     "Revoked access tokens": "Revoked access tokens",
     "Revoked an access token": "Revoked an access token",
     "Reward period: {{start}}–{{end}}": "Reward period: {{start}}–{{end}}",
+    "Rewards are not enabled for this period yet": "Rewards are not enabled for this period yet",
     "Rewards are sent after each completed period (UTC+8).": "Rewards are sent after each completed period (UTC+8).",
     "Rewards begin next period": "Rewards begin next period",
     "Rewards will be added directly to your balance": "Rewards will be added directly to your balance",

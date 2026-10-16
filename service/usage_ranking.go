@@ -31,6 +31,7 @@ type UsageRankingRewardRecipient struct {
 }
 
 type UsageRankingRewardPreview struct {
+	Configured   bool                          `json:"configured"`
 	Eligible     bool                          `json:"eligible"`
 	SettlementAt int64                         `json:"settlement_at"`
 	PeriodStart  int64                         `json:"period_start"`
@@ -72,23 +73,31 @@ func GetUsageRanking(period string, now time.Time) (*UsageRankingSnapshot, error
 	if err != nil {
 		return nil, err
 	}
-	reward, err := getUsageRankingRewardPreview(period, start, end, users)
+	reward, err := getUsageRankingRewardPreview(period, start, end)
 	if err != nil {
 		logger.LogWarn(context.Background(), fmt.Sprintf("usage ranking reward preview failed: %v", err))
 	}
 	return &UsageRankingSnapshot{Period: period, Start: start, End: end, TotalTokens: total, Users: users, Reward: reward}, nil
 }
 
-func nextUsageRankingRewardWindow(period string, setting operation_setting.UsageRankingRewards, lastStart int64) (time.Time, time.Time, error) {
-	start, end, err := usageRankingBounds(period, time.Unix(setting.EnabledAt, 0))
+func firstUsageRankingRewardWindow(period string, setting operation_setting.UsageRankingRewards) (time.Time, time.Time, error) {
+	// 首个奖励周期从启用日零点开始，结束时间仍沿用日、周、月、年的自然边界。
+	enabledAt := time.Unix(setting.EnabledAt, 0).In(operation_setting.UsageRankingLocation)
+	start, end, err := usageRankingBounds(period, enabledAt)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	if start.Unix() < setting.EnabledAt {
-		start, end, err = usageRankingBounds(period, end)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
+	activationDay := time.Date(enabledAt.Year(), enabledAt.Month(), enabledAt.Day(), 0, 0, 0, 0, enabledAt.Location())
+	if activationDay.After(start) {
+		start = activationDay
+	}
+	return start, end, nil
+}
+
+func nextUsageRankingRewardWindow(period string, setting operation_setting.UsageRankingRewards, lastStart int64) (time.Time, time.Time, error) {
+	start, end, err := firstUsageRankingRewardWindow(period, setting)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
 	if lastStart >= start.Unix() {
 		_, lastEnd, boundsErr := usageRankingBounds(period, time.Unix(lastStart, 0))
@@ -125,36 +134,35 @@ func usageRankingRewardQuota(amount string) (int, bool, error) {
 	return quota, true, nil
 }
 
-func buildUsageRankingRewardPreview(period string, setting operation_setting.UsageRankingRewards, start, end time.Time, users []model.UsageRankingEntry) (*UsageRankingRewardPreview, error) {
-	// Only complete periods after activation qualify, matching the settlement task.
-	eligible := start.Unix() >= setting.EnabledAt
-	if !eligible {
-		var err error
-		start, end, err = nextUsageRankingRewardWindow(period, setting, 0)
-		if err != nil {
-			return nil, err
-		}
-		users = nil
-	}
+func buildUsageRankingRewardPreview(period string, setting operation_setting.UsageRankingRewards, start, end time.Time, eligible bool, users []model.UsageRankingEntry) (*UsageRankingRewardPreview, error) {
 	amounts := setting.Amounts(period)
+	quotas := [3]int{}
+	configured := false
+	for index, amount := range amounts {
+		quota, shouldReward, err := usageRankingRewardQuota(amount)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s ranking reward: %w", period, err)
+		}
+		if shouldReward {
+			configured = true
+			quotas[index] = quota
+		}
+	}
 	recipients := make([]UsageRankingRewardRecipient, 0, min(len(users), 3))
 	for index, user := range users {
 		if index >= 3 {
 			break
 		}
-		quota, shouldReward, err := usageRankingRewardQuota(amounts[index])
-		if err != nil {
-			return nil, fmt.Errorf("invalid %s ranking reward: %w", period, err)
-		}
-		if !shouldReward {
+		if quotas[index] == 0 {
 			continue
 		}
 		recipients = append(recipients, UsageRankingRewardRecipient{
-			UserID: user.UserID, Name: user.Name, Rank: index + 1, Quota: quota,
+			UserID: user.UserID, Name: user.Name, Rank: index + 1, Quota: quotas[index],
 		})
 	}
 	settlementAt := end.Add(time.Duration(max(common.DataExportInterval, 10)) * time.Minute)
 	return &UsageRankingRewardPreview{
+		Configured:   configured,
 		Eligible:     eligible,
 		SettlementAt: settlementAt.Unix(),
 		PeriodStart:  start.Unix(),
@@ -163,7 +171,8 @@ func buildUsageRankingRewardPreview(period string, setting operation_setting.Usa
 	}, nil
 }
 
-func getUsageRankingRewardPreview(period string, start, end int64, users []model.UsageRankingEntry) (*UsageRankingRewardPreview, error) {
+func getUsageRankingRewardPreview(period string, start, end int64) (*UsageRankingRewardPreview, error) {
+	// 即使当前周期尚未配置金额，也返回状态供前端显示“暂未开启该周期的奖励”。
 	if period == "all" {
 		return nil, nil
 	}
@@ -172,9 +181,27 @@ func getUsageRankingRewardPreview(period string, start, end int64, users []model
 		return nil, err
 	}
 	if !setting.Enabled || !common.DataExportEnabled {
-		return nil, nil
+		return &UsageRankingRewardPreview{Recipients: []UsageRankingRewardRecipient{}}, nil
 	}
-	return buildUsageRankingRewardPreview(period, setting, time.Unix(start, 0), time.Unix(end, 0), users)
+	firstStart, firstEnd, err := firstUsageRankingRewardWindow(period, setting)
+	if err != nil {
+		return nil, err
+	}
+	previewStart, previewEnd := time.Unix(start, 0), time.Unix(end, 0)
+	eligible := end > firstStart.Unix()
+	if !eligible {
+		previewStart, previewEnd = firstStart, firstEnd
+	} else if previewStart.Before(firstStart) {
+		previewStart = firstStart
+	}
+	users := make([]model.UsageRankingEntry, 0)
+	if eligible {
+		users, _, err = model.QueryUsageRanking(previewStart.Unix(), previewEnd.Unix(), 3)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buildUsageRankingRewardPreview(period, setting, previewStart, previewEnd, eligible, users)
 }
 
 var usageRankingRewardOnce sync.Once

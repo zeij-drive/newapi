@@ -45,20 +45,35 @@ func TestUsageRankingBounds(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNextUsageRankingRewardWindowRespectsActivationAndSettlement(t *testing.T) {
+func TestFirstUsageRankingRewardWindowStartsAtActivationDay(t *testing.T) {
 	setting := operation_setting.UsageRankingRewards{
 		Enabled:   true,
 		EnabledAt: rankingTime(2026, time.October, 6, 13).Unix(),
 	}
-	start, end, err := nextUsageRankingRewardWindow("week", setting, 0)
-	require.NoError(t, err)
-	assert.Equal(t, rankingTime(2026, time.October, 12, 0), start)
-	assert.Equal(t, rankingTime(2026, time.October, 19, 0), end)
+	for _, test := range []struct {
+		period string
+		start  time.Time
+		end    time.Time
+	}{
+		{period: "today", start: rankingTime(2026, time.October, 6, 0), end: rankingTime(2026, time.October, 7, 0)},
+		{period: "week", start: rankingTime(2026, time.October, 6, 0), end: rankingTime(2026, time.October, 12, 0)},
+		{period: "month", start: rankingTime(2026, time.October, 6, 0), end: rankingTime(2026, time.November, 1, 0)},
+		{period: "year", start: rankingTime(2026, time.October, 6, 0), end: rankingTime(2027, time.January, 1, 0)},
+	} {
+		t.Run(test.period, func(t *testing.T) {
+			start, end, err := nextUsageRankingRewardWindow(test.period, setting, 0)
+			require.NoError(t, err)
+			assert.Equal(t, test.start, start)
+			assert.Equal(t, test.end, end)
 
-	start, end, err = nextUsageRankingRewardWindow("week", setting, start.Unix())
-	require.NoError(t, err)
-	assert.Equal(t, rankingTime(2026, time.October, 19, 0), start)
-	assert.Equal(t, rankingTime(2026, time.October, 26, 0), end)
+			start, end, err = nextUsageRankingRewardWindow(test.period, setting, start.Unix())
+			require.NoError(t, err)
+			nextStart, nextEnd, err := usageRankingBounds(test.period, test.end)
+			require.NoError(t, err)
+			assert.Equal(t, nextStart, start)
+			assert.Equal(t, nextEnd, end)
+		})
+	}
 }
 
 // The configured DSNs must point to disposable databases containing no application data.
@@ -169,6 +184,7 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 		require.NoError(t, db.Create(&users[i]).Error)
 	}
 	for _, usage := range []model.QuotaData{
+		{UserID: users[1].Id, CreatedAt: rankingTime(2026, time.October, 5, 12).Unix(), TokenUsed: 1000},
 		{UserID: users[0].Id, CreatedAt: rankingTime(2026, time.October, 6, 12).Unix(), TokenUsed: 10},
 		{UserID: users[1].Id, CreatedAt: rankingTime(2026, time.October, 6, 12).Unix(), TokenUsed: 10},
 		{UserID: users[1].Id, CreatedAt: rankingTime(2026, time.October, 7, 12).Unix(), TokenUsed: 20},
@@ -183,8 +199,9 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 
 	key := operation_setting.UsageRankingRewardsOptionKey
 	encoded, err := common.Marshal(operation_setting.UsageRankingRewards{
-		Enabled: true, EnabledAt: rankingTime(2026, time.October, 5, 12).Unix(),
-		Daily: [3]string{"1.00", "0.50", ""},
+		Enabled: true, EnabledAt: rankingTime(2026, time.October, 6, 13).Unix(),
+		Daily: [3]string{"1.00", "0.50", ""}, Weekly: [3]string{"1.00", "0.50", ""},
+		Monthly: [3]string{"1.00", "0.50", ""}, Yearly: [3]string{"1.00", "0.50", ""},
 	})
 	require.NoError(t, err)
 	common.OptionMapRWMutex.Lock()
@@ -224,23 +241,23 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 	assert.Equal(t, UsageRankingRewardRecipient{UserID: users[0].Id, Name: "A", Rank: 1, Quota: int(common.QuotaPerUnit)}, dailySnapshot.Reward.Recipients[0])
 	assert.Equal(t, UsageRankingRewardRecipient{UserID: users[1].Id, Name: "B", Rank: 2, Quota: int(common.QuotaPerUnit / 2)}, dailySnapshot.Reward.Recipients[1])
 
-	ineligibleSetting := operation_setting.UsageRankingRewards{
+	unconfiguredSetting := operation_setting.UsageRankingRewards{
 		Enabled:   true,
 		EnabledAt: rankingTime(2026, time.October, 6, 13).Unix(),
-		Daily:     [3]string{"1.00", "0.50", ""},
 	}
-	ineligibleEncoded, err := common.Marshal(ineligibleSetting)
+	unconfiguredEncoded, err := common.Marshal(unconfiguredSetting)
 	require.NoError(t, err)
 	common.OptionMapRWMutex.Lock()
-	common.OptionMap[key] = string(ineligibleEncoded)
+	common.OptionMap[key] = string(unconfiguredEncoded)
 	common.OptionMapRWMutex.Unlock()
-	ineligibleSnapshot, err := GetUsageRanking("today", rankingTime(2026, time.October, 6, 13))
+	unconfiguredSnapshot, err := GetUsageRanking("today", rankingTime(2026, time.October, 6, 13))
 	require.NoError(t, err)
-	require.NotNil(t, ineligibleSnapshot.Reward)
-	assert.False(t, ineligibleSnapshot.Reward.Eligible)
-	assert.Equal(t, rankingTime(2026, time.October, 7, 0).Unix(), ineligibleSnapshot.Reward.PeriodStart)
-	assert.Equal(t, rankingTime(2026, time.October, 8, 0).Add(10*time.Minute).Unix(), ineligibleSnapshot.Reward.SettlementAt)
-	assert.Empty(t, ineligibleSnapshot.Reward.Recipients, "users in a period before activation must not be shown as reward recipients")
+	require.NotNil(t, unconfiguredSnapshot.Reward)
+	assert.True(t, unconfiguredSnapshot.Reward.Eligible, "the activation day counts as the first reward day")
+	assert.False(t, unconfiguredSnapshot.Reward.Configured)
+	assert.Equal(t, rankingTime(2026, time.October, 6, 0).Unix(), unconfiguredSnapshot.Reward.PeriodStart)
+	assert.Equal(t, rankingTime(2026, time.October, 7, 0).Add(10*time.Minute).Unix(), unconfiguredSnapshot.Reward.SettlementAt)
+	assert.Empty(t, unconfiguredSnapshot.Reward.Recipients)
 
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap[key] = string(encoded)
@@ -250,7 +267,7 @@ func TestUsageRankingCatchUpAndAwardIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, allTimeSnapshot.Reward, "all-time rankings do not have a reward settlement period")
 
-	now := rankingTime(2026, time.October, 8, 1)
+	now := rankingTime(2026, time.October, 8, 1).Add(30 * time.Minute)
 	require.NoError(t, settleUsageRankingRewards(now))
 	require.NoError(t, settleUsageRankingRewards(now))
 	var awards []model.UsageRankingAward

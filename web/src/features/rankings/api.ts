@@ -36,6 +36,7 @@ export async function getRankings(
 export type UsageRankingPeriod = RankingPeriod | 'all'
 
 export type UsageRankingRewardPreview = {
+  configured: boolean
   eligible: boolean
   settlement_at: number
   period_start: number

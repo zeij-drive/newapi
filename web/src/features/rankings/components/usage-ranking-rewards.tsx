@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Clock3, Gift } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -54,6 +55,55 @@ export function UsageRankingRewards(props: UsageRankingRewardsProps) {
     timeZone: 'Asia/Shanghai',
   }).format(props.reward.settlement_at * 1000)
 
+  let rewardContent: ReactNode
+  if (!props.reward.configured) {
+    rewardContent = (
+      <p className='text-muted-foreground text-sm'>
+        {t('Rewards are not enabled for this period yet')}
+      </p>
+    )
+  } else if (props.reward.recipients.length > 0) {
+    rewardContent = (
+      <ol
+        aria-label={t('Expected reward recipients')}
+        className='bg-background divide-y rounded-lg border px-4'
+      >
+        {props.reward.recipients.map((recipient) => (
+          <li
+            key={`${recipient.user_id}-${recipient.rank}`}
+            aria-label={t('Rank {{rank}}', { rank: recipient.rank })}
+            className='flex min-w-0 items-center gap-3 py-3 sm:gap-4'
+          >
+            <span className='text-muted-foreground w-7 shrink-0 text-right font-mono text-sm'>
+              {recipient.rank}
+            </span>
+            <span
+              className='min-w-0 flex-1 truncate font-medium'
+              title={recipient.name}
+            >
+              {recipient.name}
+            </span>
+            <strong className='shrink-0 font-mono text-sm font-semibold tabular-nums sm:text-base'>
+              +
+              {formatQuotaWithCurrency(recipient.quota, {
+                locale,
+                abbreviate: false,
+              })}
+            </strong>
+          </li>
+        ))}
+      </ol>
+    )
+  } else {
+    rewardContent = (
+      <p className='text-muted-foreground text-sm'>
+        {props.reward.eligible
+          ? t('No eligible recipients yet')
+          : t('Rewards begin next period')}
+      </p>
+    )
+  }
+
   return (
     <section aria-label={t('Upcoming balance rewards')}>
       <Card className='border-primary/20 bg-primary/5'>
@@ -62,61 +112,27 @@ export function UsageRankingRewards(props: UsageRankingRewardsProps) {
             <Gift aria-hidden className='size-5' />
             {t('Upcoming balance rewards')}
           </CardTitle>
-          <p className='text-muted-foreground flex flex-wrap items-center gap-2 text-sm'>
-            <Clock3 aria-hidden className='size-4 shrink-0' />
-            <span>{t('Estimated settlement')}:</span>
-            <time
-              className='text-foreground font-medium'
-              dateTime={new Date(
-                props.reward.settlement_at * 1000
-              ).toISOString()}
-            >
-              {settlementTime} (UTC+8)
-            </time>
-          </p>
-          <p className='text-muted-foreground text-sm'>
-            {t('Reward period: {{start}}–{{end}}', { start, end })}
-          </p>
-        </CardHeader>
-        <CardContent>
-          {props.reward.recipients.length > 0 ? (
-            <ol
-              aria-label={t('Expected reward recipients')}
-              className='bg-background divide-y rounded-lg border px-4'
-            >
-              {props.reward.recipients.map((recipient) => (
-                <li
-                  key={`${recipient.user_id}-${recipient.rank}`}
-                  aria-label={t('Rank {{rank}}', { rank: recipient.rank })}
-                  className='flex min-w-0 items-center gap-3 py-3 sm:gap-4'
+          {props.reward.configured && (
+            <>
+              <p className='text-muted-foreground flex flex-wrap items-center gap-2 text-sm'>
+                <Clock3 aria-hidden className='size-4 shrink-0' />
+                <span>{t('Estimated settlement')}:</span>
+                <time
+                  className='text-foreground font-medium'
+                  dateTime={new Date(
+                    props.reward.settlement_at * 1000
+                  ).toISOString()}
                 >
-                  <span className='text-muted-foreground w-7 shrink-0 text-right font-mono text-sm'>
-                    {recipient.rank}
-                  </span>
-                  <span
-                    className='min-w-0 flex-1 truncate font-medium'
-                    title={recipient.name}
-                  >
-                    {recipient.name}
-                  </span>
-                  <strong className='shrink-0 font-mono text-sm font-semibold tabular-nums sm:text-base'>
-                    +
-                    {formatQuotaWithCurrency(recipient.quota, {
-                      locale,
-                      abbreviate: false,
-                    })}
-                  </strong>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className='text-muted-foreground text-sm'>
-              {props.reward.eligible
-                ? t('No eligible recipients yet')
-                : t('Rewards begin next period')}
-            </p>
+                  {settlementTime} (UTC+8)
+                </time>
+              </p>
+              <p className='text-muted-foreground text-sm'>
+                {t('Reward period: {{start}}–{{end}}', { start, end })}
+              </p>
+            </>
           )}
-        </CardContent>
+        </CardHeader>
+        <CardContent>{rewardContent}</CardContent>
       </Card>
     </section>
   )
