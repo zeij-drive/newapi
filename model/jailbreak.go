@@ -9,10 +9,17 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	JailbreakModeOffline = "offline"
+	JailbreakModeOnline  = "online"
+	JailbreakModeHybrid  = "hybrid"
+)
+
 // JailbreakPolicy always uses a group whitelist: all other groups are inspected.
-// The detector references an existing channel so credentials never enter options.
+// Online and hybrid modes reference an existing channel so credentials never enter options.
 type JailbreakPolicy struct {
 	Enabled       bool
+	Mode          string
 	AllowedGroups []string
 	ChannelID     int
 	Model         string
@@ -27,12 +34,18 @@ func buildJailbreakPolicy(raw map[string]string) (JailbreakPolicy, error) {
 	if err != nil {
 		return policy, fmt.Errorf("invalid jailbreak enabled value")
 	}
+	policy.Mode = raw["JailbreakMode"]
+	switch policy.Mode {
+	case JailbreakModeOffline, JailbreakModeOnline, JailbreakModeHybrid:
+	default:
+		return policy, fmt.Errorf("invalid jailbreak detection mode")
+	}
 	policy.ChannelID, err = strconv.Atoi(raw["JailbreakChannelId"])
-	if err != nil || policy.ChannelID < 0 || (policy.Enabled && policy.ChannelID == 0) {
+	if err != nil || policy.ChannelID < 0 || (policy.Enabled && policy.Mode != JailbreakModeOffline && policy.ChannelID == 0) {
 		return policy, fmt.Errorf("select a jailbreak detection channel")
 	}
 	policy.Model = strings.TrimSpace(raw["JailbreakModel"])
-	if policy.Model == "" || len(policy.Model) > 200 {
+	if policy.Mode != JailbreakModeOffline && (policy.Model == "" || len(policy.Model) > 200) {
 		return policy, fmt.Errorf("jailbreak detection model is required (maximum 200 characters)")
 	}
 	policy.BanThreshold, err = strconv.Atoi(raw["JailbreakBanThreshold"])

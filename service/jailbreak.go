@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,17 @@ import (
 )
 
 var jailbreakScanSlots = make(chan struct{}, 32)
+
+var offlineJailbreakPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bignore\s+(?:(?:all|any|the)\s+)?(?:previous|prior|preceding|above)\s+(?:(?:system|developer)\s+)?(?:instructions?|rules?|prompts?)\b`),
+	regexp.MustCompile(`(?i)\b(?:disregard|forget)\s+(?:(?:all|any)\s+)?(?:previous|prior|preceding|above)\s+(?:(?:system|developer)\s+)?(?:instructions?|rules?|prompts?)\b`),
+	regexp.MustCompile(`(?i)\b(?:reveal|print|repeat|show|expose)\s+(?:the\s+)?(?:(?:hidden|system|developer)\s+)*(?:prompt|instructions?)\b`),
+	regexp.MustCompile(`(?i)\b(?:enable|activate|enter)\s+(?:the\s+)?(?:developer|unrestricted|dan)\s+mode\b`),
+	regexp.MustCompile(`忽略(?:掉)?(?:(?:此前|之前|先前|上文|以上|前面)(?:的)?(?:所有|全部)?|所有(?:此前|之前|先前|上文|以上|前面)?(?:的)?)(?:系统|开发者)?(?:指令|规则|提示词|提示)`),
+	regexp.MustCompile(`无视(?:(?:此前|之前|先前|上文|以上|前面)(?:的)?(?:所有|全部)?|所有(?:此前|之前|先前|上文|以上|前面)?(?:的)?)(?:系统|开发者)?(?:指令|规则|提示词|提示)`),
+	regexp.MustCompile(`(?:输出|泄露|打印|复述|展示|给出)(?:全部|完整|隐藏的?)?(?:系统|开发者)(?:提示词|指令|消息)`),
+	regexp.MustCompile(`(?i)(?:开启|启用|进入)(?:开发者|无限制|DAN|越狱)模式`),
+}
 
 // Each group selection rechecks the whitelist. Only a completed scan is reused
 // within this request; exemptions never authorize a later group outside the list.
@@ -79,6 +91,18 @@ func CheckJailbreakRequest(c *gin.Context) *types.NewAPIError {
 		c.Set("jailbreak_checked_policy", policy)
 		return nil
 	}
+	if policy.Jailbreak.Mode != model.JailbreakModeOnline {
+		if policy.Jailbreak.Mode != model.JailbreakModeOffline && policy.Jailbreak.Mode != model.JailbreakModeHybrid {
+			return jailbreakUnavailable()
+		}
+		if matchesOfflineJailbreak(text) {
+			return interceptJailbreakRequest(c, policy.Jailbreak, group)
+		}
+		if policy.Jailbreak.Mode == model.JailbreakModeOffline {
+			c.Set("jailbreak_checked_policy", policy)
+			return nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 	select {
@@ -112,13 +136,7 @@ func CheckJailbreakRequest(c *gin.Context) *types.NewAPIError {
 			return jailbreakUnavailable()
 		}
 		if blocked {
-			count, banned, err := model.RecordJailbreakInterception(c.GetInt("id"), policy.Jailbreak.BanThreshold)
-			if err != nil {
-				return jailbreakUnavailable()
-			}
-			logger.LogWarn(c, "jailbreak intercepted user=%d group=%q count=%d banned=%t", c.GetInt("id"), group, count, banned)
-			RequestPolicy(c).AddEvent(PolicyEvent{ErrorCode: "jailbreak_detected", ErrorSource: "local", Decision: PolicyDecision{Action: "stop", Reason: "local_rejection", Source: "global"}, Health: "unchanged"})
-			return types.NewErrorWithStatusCode(errors.New(policy.Jailbreak.Replies[min(max(count, 1), len(policy.Jailbreak.Replies))-1]), types.ErrorCode("jailbreak_detected"), http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			return interceptJailbreakRequest(c, policy.Jailbreak, group)
 		}
 		if end == len(input) {
 			break
@@ -127,6 +145,25 @@ func CheckJailbreakRequest(c *gin.Context) *types.NewAPIError {
 	}
 	c.Set("jailbreak_checked_policy", policy)
 	return nil
+}
+
+func matchesOfflineJailbreak(text string) bool {
+	for _, pattern := range offlineJailbreakPatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func interceptJailbreakRequest(c *gin.Context, policy model.JailbreakPolicy, group string) *types.NewAPIError {
+	count, banned, err := model.RecordJailbreakInterception(c.GetInt("id"), policy.BanThreshold)
+	if err != nil {
+		return jailbreakUnavailable()
+	}
+	logger.LogWarn(c, "jailbreak intercepted user=%d group=%q count=%d banned=%t", c.GetInt("id"), group, count, banned)
+	RequestPolicy(c).AddEvent(PolicyEvent{ErrorCode: "jailbreak_detected", ErrorSource: "local", Decision: PolicyDecision{Action: "stop", Reason: "local_rejection", Source: "global"}, Health: "unchanged"})
+	return types.NewErrorWithStatusCode(errors.New(policy.Replies[min(max(count, 1), len(policy.Replies))-1]), types.ErrorCode("jailbreak_detected"), http.StatusForbidden, types.ErrOptionWithSkipRetry())
 }
 
 func jailbreakUnavailable() *types.NewAPIError {

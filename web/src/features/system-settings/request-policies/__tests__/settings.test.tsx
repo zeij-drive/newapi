@@ -148,8 +148,9 @@ beforeEach(() => {
     },
   })
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
-    if (url === '/api/group/')
+    if (url === '/api/group/') {
       return { data: { success: true, data: ['default', 'allowed'] } }
+    }
     if (url === '/api/option/') return { data: optionsResponse() }
     if (url === '/api/option/request_policy') {
       return {
@@ -190,7 +191,8 @@ afterEach(() => {
 
 describe('request policy settings', () => {
   it('failed group loading can retry without losing custom jailbreak replies', async () => {
-    const originalGet = vi.mocked(api.get).getMockImplementation()!
+    const originalGet = vi.mocked(api.get).getMockImplementation()
+    if (!originalGet) throw new Error('Expected the mocked API handler')
     let groupFailed = false
     vi.mocked(api.get).mockImplementation(async (url, config) => {
       if (url === '/api/group/' && !groupFailed) {
@@ -234,12 +236,49 @@ describe('request policy settings', () => {
       expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
         options: {
           JailbreakEnabled: 'false',
+          JailbreakMode: 'online',
           JailbreakAllowedGroups: '[]',
           JailbreakChannelId: '0',
           JailbreakModel: 'Qwen3Guard-Gen-0.6B',
           JailbreakBanThreshold: '2',
           JailbreakReplies:
             '["Custom first reply","Jailbreak request blocked."]',
+        },
+      })
+    )
+  })
+
+  it('offline jailbreak mode hides online settings and saves without a channel', async () => {
+    await renderPolicies('/system-settings/request-policies/jailbreak')
+    await userEvent.click(
+      await screen.findByRole('combobox', { name: 'Detection mode' })
+    )
+    await userEvent.click(
+      await screen.findByRole('option', { name: 'Offline detection' })
+    )
+    expect(
+      screen.queryByRole('spinbutton', { name: 'Detection channel ID' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'Detection model' })
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save jailbreak settings' })
+    )
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+        options: {
+          JailbreakEnabled: 'false',
+          JailbreakMode: 'offline',
+          JailbreakAllowedGroups: '[]',
+          JailbreakChannelId: '0',
+          JailbreakModel: 'Qwen3Guard-Gen-0.6B',
+          JailbreakBanThreshold: '3',
+          JailbreakReplies: JSON.stringify([
+            'Jailbreak request blocked.',
+            'Jailbreak request blocked.',
+            'Account disabled after repeated jailbreak attempts.',
+          ]),
         },
       })
     )

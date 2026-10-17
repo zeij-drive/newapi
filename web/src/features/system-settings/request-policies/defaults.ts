@@ -49,6 +49,7 @@ export type RequestPolicySettings = RetrySettings &
 
 export type JailbreakSettings = {
   JailbreakEnabled: boolean
+  JailbreakMode: 'offline' | 'online' | 'hybrid'
   JailbreakAllowedGroups: string[]
   JailbreakChannelId: number
   JailbreakModel: string
@@ -80,6 +81,7 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   CheckSensitiveOnPromptEnabled: false,
   SensitiveWords: '',
   JailbreakEnabled: false,
+  JailbreakMode: 'online',
   JailbreakAllowedGroups: [],
   JailbreakChannelId: 0,
   JailbreakModel: 'Qwen3Guard-Gen-0.6B',

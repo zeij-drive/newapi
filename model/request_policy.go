@@ -62,6 +62,7 @@ func requestPolicyDefaultOptions() map[string]string {
 	defaults["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	defaults["SensitiveWords"] = setting.SensitiveWordsToString()
 	defaults["JailbreakEnabled"] = "false"
+	defaults["JailbreakMode"] = JailbreakModeOnline
 	defaults["JailbreakAllowedGroups"] = "[]"
 	defaults["JailbreakChannelId"] = "0"
 	defaults["JailbreakModel"] = "Qwen3Guard-Gen-0.6B"
@@ -77,7 +78,7 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
-	case "JailbreakEnabled", "JailbreakAllowedGroups", "JailbreakChannelId", "JailbreakModel", "JailbreakBanThreshold", "JailbreakReplies":
+	case "JailbreakEnabled", "JailbreakMode", "JailbreakAllowedGroups", "JailbreakChannelId", "JailbreakModel", "JailbreakBanThreshold", "JailbreakReplies":
 		return true
 	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
 		return true
@@ -249,7 +250,7 @@ func UpdateRequestPolicyOptions(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if snapshot.Jailbreak.Enabled {
+	if snapshot.Jailbreak.Enabled && snapshot.Jailbreak.Mode != JailbreakModeOffline {
 		channel, err := GetChannelById(snapshot.Jailbreak.ChannelID, false)
 		if err != nil || channel.Type != constant.ChannelTypeOpenAI || channel.Status != common.ChannelStatusEnabled {
 			return fmt.Errorf("select an enabled OpenAI channel for jailbreak detection")

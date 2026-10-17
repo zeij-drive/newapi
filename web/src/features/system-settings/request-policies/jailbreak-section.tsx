@@ -17,6 +17,13 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { getGroups } from '@/features/users/api'
@@ -44,6 +51,7 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
   const schema = z
     .object({
       JailbreakEnabled: z.boolean(),
+      JailbreakMode: z.enum(['offline', 'online', 'hybrid']),
       JailbreakAllowedGroups: z.array(z.string()),
       JailbreakChannelId: z
         .number()
@@ -52,7 +60,6 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
       JailbreakModel: z
         .string()
         .trim()
-        .min(1, t('Model is required'))
         .max(200, t('Maximum length is {{count}} characters', { count: 200 })),
       JailbreakBanThreshold: z
         .number()
@@ -77,11 +84,22 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
       ),
     })
     .superRefine((values, context) => {
-      if (values.JailbreakEnabled && values.JailbreakChannelId < 1) {
+      if (
+        values.JailbreakEnabled &&
+        values.JailbreakMode !== 'offline' &&
+        values.JailbreakChannelId < 1
+      ) {
         context.addIssue({
           code: 'custom',
           path: ['JailbreakChannelId'],
           message: t('Select a detection channel'),
+        })
+      }
+      if (values.JailbreakMode !== 'offline' && !values.JailbreakModel.trim()) {
+        context.addIssue({
+          code: 'custom',
+          path: ['JailbreakModel'],
+          message: t('Model is required'),
         })
       }
       if (values.JailbreakReplies.length !== values.JailbreakBanThreshold) {
@@ -104,6 +122,16 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
     ? Math.min(100, Math.max(0, threshold))
     : 0
   const enabled = form.watch('JailbreakEnabled')
+  const mode = form.watch('JailbreakMode')
+  const modeDescription = {
+    offline: t(
+      'Uses built-in text patterns locally, so quoted examples may be blocked and paraphrases may be missed; prompt text is not sent to a detection channel.'
+    ),
+    online: t('Sends prompt text to the configured Qwen3Guard detector.'),
+    hybrid: t(
+      'Checks built-in patterns first, then sends unmatched text to Qwen3Guard.'
+    ),
+  }[mode]
   const onSubmit = async (values: JailbreakSettings) => {
     try {
       await save.mutateAsync(
@@ -155,6 +183,46 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
           />
           <FormField
             control={form.control}
+            name='JailbreakMode'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Detection mode')}</FormLabel>
+                <Select
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  items={[
+                    { value: 'offline', label: t('Offline detection') },
+                    { value: 'online', label: t('Online monitoring') },
+                    {
+                      value: 'hybrid',
+                      label: t('Offline + online detection'),
+                    },
+                  ]}
+                >
+                  <FormControl>
+                    <SelectTrigger className='w-full'>
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectItem value='offline'>
+                      {t('Offline detection')}
+                    </SelectItem>
+                    <SelectItem value='online'>
+                      {t('Online monitoring')}
+                    </SelectItem>
+                    <SelectItem value='hybrid'>
+                      {t('Offline + online detection')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>{modeDescription}</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
             name='JailbreakAllowedGroups'
             render={({ field }) => (
               <FormItem>
@@ -187,45 +255,49 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
             )}
           />
           <SettingsFormGrid>
-            <FormField
-              control={form.control}
-              name='JailbreakChannelId'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Detection channel ID')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      step={1}
-                      {...field}
-                      onChange={(event) =>
-                        field.onChange(Number(event.target.value))
-                      }
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Use an OpenAI channel connected to Qwen3Guard. Its key stays in channel settings.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='JailbreakModel'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Detection model')}</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {mode !== 'offline' && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='JailbreakChannelId'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Detection channel ID')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          step={1}
+                          {...field}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Use an OpenAI channel connected to Qwen3Guard. Its key stays in channel settings.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='JailbreakModel'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Detection model')}</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
             <FormField
               control={form.control}
               name='JailbreakBanThreshold'
@@ -296,9 +368,13 @@ export function JailbreakSection(props: { defaultValues: JailbreakSettings }) {
           </div>
           {enabled && (
             <p className='text-muted-foreground text-sm'>
-              {t(
-                'Detection failures stop the request without adding a strike. Text is checked before billing; images and audio are not scanned. Realtime requires an allowed group.'
-              )}
+              {mode === 'offline'
+                ? t(
+                    'Text is checked locally before billing; images and audio are not scanned. Realtime requires an allowed group.'
+                  )
+                : t(
+                    'Detection failures stop the request without adding a strike. Text is checked before billing; images and audio are not scanned. Realtime requires an allowed group.'
+                  )}
             </p>
           )}
         </SettingsForm>

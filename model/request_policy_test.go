@@ -19,6 +19,31 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+func TestJailbreakDetectionModes(t *testing.T) {
+	legacyPolicy, err := BuildRequestPolicy(map[string]string{"JailbreakEnabled": "false"})
+	require.NoError(t, err)
+	assert.Equal(t, JailbreakModeOnline, legacyPolicy.Jailbreak.Mode, "existing settings keep online detection by default")
+
+	offlinePolicy, err := BuildRequestPolicy(map[string]string{
+		"JailbreakEnabled":   "true",
+		"JailbreakMode":      JailbreakModeOffline,
+		"JailbreakChannelId": "0",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, JailbreakModeOffline, offlinePolicy.Jailbreak.Mode)
+
+	for _, mode := range []string{JailbreakModeOnline, JailbreakModeHybrid} {
+		_, err := BuildRequestPolicy(map[string]string{
+			"JailbreakEnabled":   "true",
+			"JailbreakMode":      mode,
+			"JailbreakChannelId": "0",
+		})
+		require.Error(t, err, "%s mode requires a detection channel", mode)
+	}
+	_, err = BuildRequestPolicy(map[string]string{"JailbreakMode": "unknown"})
+	require.Error(t, err)
+}
+
 func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
