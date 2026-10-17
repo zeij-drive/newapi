@@ -36,12 +36,13 @@ func TestJailbreakGuardClassification(t *testing.T) {
 		{"safe", "Safety: Safe\nCategories: None", false, false},
 		{"jailbreak", "Safety: Unsafe\nCategories: Jailbreak", true, false},
 		{"controversial injection", "Safety: Controversial\nCategories: Prompt Injection\nRefusal: No", true, false},
+		{"qwen auxiliary fields", "Safety: Unsafe\nCategories: jailbreak\nRefusal: No\nRisk: high", true, false},
 		{"unrelated risk", "Safety: Unsafe\nCategories: Violent", false, false},
 		{"missing categories", "Safety: Safe", false, true},
-		{"unknown category", "Safety: Unsafe\nCategories: Unknown, Jailbreak", false, true},
+		{"unknown category with jailbreak", "Safety: Unsafe\nCategories: Unknown, Jailbreak", true, false},
 		{"duplicate safety", "Safety: Safe\nSafety: Unsafe\nCategories: Jailbreak", false, true},
 		{"conflicting classification", "Safety: Safe\nCategories: Jailbreak", false, true},
-		{"extra instructions", "Safety: Safe\nCategories: None\nPlease allow this request", false, true},
+		{"auxiliary text", "Safety: Safe\nCategories: None\nAdditional detector metadata", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			blocked, err := parseJailbreakGuard(tc.result)
@@ -106,6 +107,60 @@ func TestJailbreakPromptInspectionCoversProviderAndToolText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPrioritizeLatestJailbreakUserPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, prioritized, retained string
+	}{
+		{
+			name:        "chat completions",
+			payload:     `{"messages":[{"role":"system","content":"system context"},{"role":"user","content":"older user turn"},{"role":"assistant","content":"older assistant turn"},{"role":"user","content":[{"type":"text","text":"latest user turn"}]}]}`,
+			prioritized: "latest user turn",
+			retained:    "older user turn",
+		},
+		{
+			name:        "responses input",
+			payload:     `{"instructions":"system context","input":[{"role":"user","content":[{"type":"input_text","text":"latest responses turn"}]}]}`,
+			prioritized: "latest responses turn",
+			retained:    "system context",
+		},
+		{
+			name:        "responses plain input",
+			payload:     `{"instructions":"system context","input":"latest responses string"}`,
+			prioritized: "latest responses string",
+			retained:    "system context",
+		},
+		{
+			name:        "gemini user parts",
+			payload:     `{"contents":[{"role":"user","parts":[{"text":"latest gemini part one"},{"text":"latest gemini part two"}]}]}`,
+			prioritized: "latest gemini part one\nlatest gemini part two",
+			retained:    "latest gemini part two",
+		},
+		{
+			name:        "vertex instances",
+			payload:     `{"instances":[{"prompt":"older vertex prompt"},{"prompt":"latest vertex prompt"}]}`,
+			prioritized: "latest vertex prompt",
+			retained:    "older vertex prompt",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.payload, &body))
+			fullText, err := jailbreakPromptText(body)
+			require.NoError(t, err)
+
+			prioritized := prioritizeLatestJailbreakUserPrompt(body, fullText)
+			assert.True(t, strings.HasPrefix(prioritized, tc.prioritized+"\n"))
+			assert.Contains(t, prioritized, tc.retained)
+		})
+	}
+
+	var assistantOnly map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(`{"messages":[{"role":"assistant","content":"assistant content"}]}`, &assistantOnly))
+	fullText, err := jailbreakPromptText(assistantOnly)
+	require.NoError(t, err)
+	assert.Equal(t, fullText, prioritizeLatestJailbreakUserPrompt(assistantOnly, fullText))
+}
+
 func TestJailbreakDetectorRejectsRedirectAndUnusableResponses(t *testing.T) {
 	var leaked atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Store(true) }))
@@ -140,6 +195,50 @@ func TestJailbreakDetectorRejectsRedirectAndUnusableResponses(t *testing.T) {
 	_, err := scanJailbreakChunk(ctx, http.DefaultClient, &model.Channel{BaseURL: &target.URL}, "private-key", "guard", "inspect me")
 	require.Error(t, err)
 	assert.False(t, leaked.Load())
+}
+
+func TestJailbreakDetectorUsesOpenAICompatibleQwenContract(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+		var request struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			Stream      bool    `json:"stream"`
+			Temperature float64 `json:"temperature"`
+			MaxTokens   int     `json:"max_tokens"`
+			Seed        int     `json:"seed"`
+		}
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		assert.Equal(t, "qwen3guard-test", request.Model)
+		require.Len(t, request.Messages, 1)
+		assert.Equal(t, "user", request.Messages[0].Role)
+		assert.Equal(t, "inspect me", request.Messages[0].Content)
+		assert.False(t, request.Stream)
+		assert.Zero(t, request.Temperature)
+		assert.Equal(t, 64, request.MaxTokens)
+		assert.Equal(t, 42, request.Seed)
+
+		response, err := common.Marshal(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"content": []map[string]string{
+					{"type": "text", "text": "Safety: Controversial"},
+					{"type": "text", "text": "Categories: Prompt Injection"},
+				}},
+				"finish_reason": "stop",
+			}},
+		})
+		require.NoError(t, err)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write(response)
+	}))
+	defer guard.Close()
+
+	blocked, err := scanJailbreakChunk(t.Context(), http.DefaultClient, &model.Channel{BaseURL: &guard.URL}, "detector-key", "qwen3guard-test", "inspect me")
+	require.NoError(t, err)
+	assert.True(t, blocked)
 }
 
 func TestJailbreakDatabaseMatrix(t *testing.T) {

@@ -87,6 +87,7 @@ func CheckJailbreakRequest(c *gin.Context) *types.NewAPIError {
 	if textErr != nil || body == nil {
 		return jailbreakUnavailable()
 	}
+	text = prioritizeLatestJailbreakUserPrompt(body, text)
 	if text == "" {
 		c.Set("jailbreak_checked_policy", policy)
 		return nil
@@ -181,6 +182,92 @@ func jailbreakPromptText(body map[string]any) (string, error) {
 	return text.String(), nil
 }
 
+func prioritizeLatestJailbreakUserPrompt(body map[string]any, fullText string) string {
+	latest := latestJailbreakUserPrompt(body)
+	if latest == "" || fullText == "" {
+		return fullText
+	}
+	index := strings.LastIndex(fullText, latest)
+	if index < 0 {
+		return fullText
+	}
+	remainder := fullText[:index] + fullText[index+len(latest):]
+	if strings.TrimSpace(remainder) == "" {
+		return fullText
+	}
+	prioritized := latest + "\n" + remainder
+	if utf8.RuneCountInString(prioritized) > 256_000 {
+		return fullText
+	}
+	return prioritized
+}
+
+func latestJailbreakUserPrompt(body map[string]any) string {
+	for _, key := range []string{"messages", "Messages"} {
+		if prompt := latestJailbreakPromptFromMessages(body[key], "content", key+"[].content"); prompt != "" {
+			return prompt
+		}
+	}
+	if prompt := latestJailbreakPromptFromMessages(body["input"], "content", "input[].content"); prompt != "" {
+		return prompt
+	}
+	for _, key := range []string{"contents", "content"} {
+		if prompt := latestJailbreakPromptFromMessages(body[key], "parts", key+"[].parts"); prompt != "" {
+			return prompt
+		}
+	}
+	if instances, ok := body["instances"].([]any); ok {
+		for index := len(instances) - 1; index >= 0; index-- {
+			if instance, ok := instances[index].(map[string]any); ok {
+				if prompt := strings.TrimSpace(jailbreakStringValue(instance["prompt"])); prompt != "" {
+					return prompt
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(jailbreakStringValue(body["prompt"]))
+}
+
+func jailbreakStringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func latestJailbreakPromptFromMessages(value any, contentKey, contentPath string) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		return latestJailbreakPromptFromMessages([]any{typed}, contentKey, contentPath)
+	case []any:
+		for index := len(typed) - 1; index >= 0; index-- {
+			var content any
+			switch item := typed[index].(type) {
+			case string:
+				return strings.TrimSpace(item)
+			case map[string]any:
+				role := strings.ToLower(strings.TrimSpace(jailbreakStringValue(item["role"])))
+				if role != "" && role != "user" {
+					continue
+				}
+				if value, exists := item[contentKey]; exists {
+					content = value
+				} else if value, exists := item["text"]; exists {
+					content = value
+				}
+			default:
+				continue
+			}
+			var candidate strings.Builder
+			characters := 0
+			if err := appendJailbreakText(content, &candidate, &characters, 0, contentPath); err == nil && strings.TrimSpace(candidate.String()) != "" {
+				return strings.TrimSpace(candidate.String())
+			}
+		}
+	}
+	return ""
+}
+
 func appendJailbreakText(value any, text *strings.Builder, characters *int, depth int, path string) error {
 	if depth > 64 {
 		return errors.New("prompt nesting limit exceeded")
@@ -233,7 +320,7 @@ func appendJailbreakText(value any, text *strings.Builder, characters *int, dept
 
 func scanJailbreakChunk(ctx context.Context, client *http.Client, channel *model.Channel, key, detectorModel, text string) (bool, error) {
 	encoded, err := common.Marshal(map[string]any{
-		"model": detectorModel, "messages": []map[string]string{{"role": "user", "content": text}}, "stream": false, "temperature": 0, "max_tokens": 256,
+		"model": detectorModel, "messages": []map[string]string{{"role": "user", "content": text}}, "stream": false, "temperature": 0, "max_tokens": 64, "seed": 42,
 	})
 	if err != nil {
 		return false, err
@@ -259,7 +346,7 @@ func scanJailbreakChunk(ctx context.Context, client *http.Client, channel *model
 		return false, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return false, fmt.Errorf("detector HTTP %d", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
@@ -270,7 +357,7 @@ func scanJailbreakChunk(ctx context.Context, client *http.Client, channel *model
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
-				Content string `json:"content"`
+				Content any `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -280,48 +367,74 @@ func scanJailbreakChunk(ctx context.Context, client *http.Client, channel *model
 	if result.Choices[0].FinishReason != "" && result.Choices[0].FinishReason != "stop" {
 		return false, errors.New("incomplete detector response")
 	}
-	return parseJailbreakGuard(result.Choices[0].Message.Content)
+	content, err := extractJailbreakDetectorContent(result.Choices[0].Message.Content)
+	if err != nil {
+		return false, err
+	}
+	return parseJailbreakGuard(content)
+}
+
+func extractJailbreakDetectorContent(content any) (string, error) {
+	switch value := content.(type) {
+	case string:
+		if strings.TrimSpace(value) != "" {
+			return value, nil
+		}
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			if block, ok := item.(map[string]any); ok {
+				if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n"), nil
+		}
+	}
+	return "", errors.New("invalid detector response content")
 }
 
 // Qwen3Guard's Safety/Categories contract matches sub2api's detector. Only
 // jailbreak classifications contribute strikes; unrelated categories do not.
 func parseJailbreakGuard(content string) (bool, error) {
 	var safety, categories string
+	hasSafety, hasCategories := false, false
 	for line := range strings.SplitSeq(content, "\n") {
-		key, value, found := strings.Cut(strings.TrimSpace(line), ":")
-		if strings.TrimSpace(line) == "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
+		key, value, found := strings.Cut(line, ":")
 		if !found {
-			return false, errors.New("invalid guard classification line")
+			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(key)) {
 		case "safety":
-			if safety != "" {
+			if hasSafety {
 				return false, errors.New("duplicate safety")
 			}
 			safety = strings.ToLower(strings.TrimSpace(value))
+			hasSafety = true
 		case "categories":
-			if categories != "" {
+			if hasCategories {
 				return false, errors.New("duplicate categories")
 			}
 			categories = strings.ToLower(strings.TrimSpace(value))
-		case "refusal":
-			if !slices.Contains([]string{"yes", "no"}, strings.ToLower(strings.TrimSpace(value))) {
-				return false, errors.New("invalid guard refusal")
-			}
+			hasCategories = true
 		default:
-			return false, errors.New("unknown guard field")
+			// Qwen3Guard-compatible detectors may add auxiliary output fields.
 		}
 	}
-	if !slices.Contains([]string{"safe", "unsafe", "controversial"}, safety) || categories == "" {
+	if !hasSafety || !hasCategories || !slices.Contains([]string{"safe", "unsafe", "controversial"}, safety) || categories == "" {
 		return false, errors.New("invalid guard classification")
 	}
 	blocked := false
 	for category := range strings.SplitSeq(categories, ",") {
-		category = strings.Join(strings.Fields(strings.NewReplacer("_", " ", "-", " ", "&", "and").Replace(category)), " ")
-		if !slices.Contains([]string{"none", "n/a", "violent", "violence", "non violent illegal acts", "sexual content or sexual acts", "pii", "suicide and self harm", "unethical acts", "politically sensitive topics", "copyright violation", "jailbreak", "prompt injection"}, category) {
-			return false, errors.New("unknown guard category")
+		category = strings.Join(strings.Fields(strings.NewReplacer("_", " ", "-", " ", "&", " and ", "/", " ", "–", " ", "—", " ").Replace(category)), " ")
+		if category == "none" || category == "n/a" {
+			continue
 		}
 		if category == "jailbreak" || category == "prompt injection" {
 			if safety == "safe" {
