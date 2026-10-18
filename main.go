@@ -62,7 +62,6 @@ func main() {
 		common.FatalLog("failed to initialize resources: " + err.Error())
 		return
 	}
-
 	common.SysLog("New API " + common.Version + " started")
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
@@ -216,6 +215,12 @@ func main() {
 		Addr:    ":" + port,
 		Handler: server,
 	}
+	qqBot, err := startManagedQQBot()
+	if err != nil {
+		common.FatalLog("failed to start QQ Bot: " + err.Error())
+		return
+	}
+	defer qqBot.stop(5 * time.Second)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

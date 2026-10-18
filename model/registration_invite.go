@@ -51,6 +51,10 @@ func registrationInviteSecret() string {
 	return common.ConfigEncryptionSecret
 }
 
+func registrationInviteConfigured() bool {
+	return registrationInviteSecret() != ""
+}
+
 func registrationInviteHash(code string) string {
 	return common.GenerateHMACWithKey([]byte("registration-invite-v1:"+registrationInviteSecret()), normalizeRegistrationInviteCode(code))
 }
@@ -95,6 +99,32 @@ func (invite *RegistrationInvite) plaintextCode() (string, error) {
 	return common.DecryptWithCryptoSecret(invite.EncryptedCode)
 }
 
+func createRegistrationInviteTx(tx *gorm.DB, createdBy, status int, claimedQQOpenIDHash *string, claimedAt, expiresAt int64) (string, error) {
+	raw, err := common.GenerateRandomCharsKey(24)
+	if err != nil {
+		return "", err
+	}
+	code := "SAPI-" + strings.ToUpper(raw)
+	encrypted, err := common.EncryptWithCryptoSecret(code)
+	if err != nil {
+		return "", err
+	}
+	invite := &RegistrationInvite{
+		CodeHash:            registrationInviteHash(code),
+		EncryptedCode:       encrypted,
+		CodePrefix:          code[:min(len(code), 12)],
+		Status:              status,
+		CreatedBy:           createdBy,
+		ClaimedQQOpenIDHash: claimedQQOpenIDHash,
+		ClaimedAt:           claimedAt,
+		ExpiresAt:           expiresAt,
+	}
+	if err := tx.Create(invite).Error; err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
 // CreateRegistrationInvites creates count independent, cryptographically
 // random invite codes. The returned plaintext values are intentionally not
 // persisted in any log or model JSON representation.
@@ -108,30 +138,14 @@ func CreateRegistrationInvites(count, createdBy int, expiresAt int64) ([]string,
 	if err := registrationInviteExpiration(expiresAt, time.Now()); err != nil {
 		return nil, err
 	}
-	if registrationInviteSecret() == "" || common.ConfigEncryptionSecret == "" {
+	if !registrationInviteConfigured() {
 		return nil, ErrRegistrationInviteNotConfigured
 	}
 	keys := make([]string, 0, count)
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for range count {
-			raw, err := common.GenerateRandomCharsKey(24)
+			code, err := createRegistrationInviteTx(tx, createdBy, RegistrationInviteStatusEnabled, nil, 0, expiresAt)
 			if err != nil {
-				return err
-			}
-			code := "SAPI-" + strings.ToUpper(raw)
-			encrypted, err := common.EncryptWithCryptoSecret(code)
-			if err != nil {
-				return err
-			}
-			invite := &RegistrationInvite{
-				CodeHash:      registrationInviteHash(code),
-				EncryptedCode: encrypted,
-				CodePrefix:    code[:min(len(code), 12)],
-				Status:        RegistrationInviteStatusEnabled,
-				CreatedBy:     createdBy,
-				ExpiresAt:     expiresAt,
-			}
-			if err := tx.Create(invite).Error; err != nil {
 				return err
 			}
 			keys = append(keys, code)
@@ -152,6 +166,9 @@ func ConsumeRegistrationInviteWithTx(tx *gorm.DB, code string, userID int) error
 	if code == "" {
 		return ErrRegistrationInviteRequired
 	}
+	if !registrationInviteConfigured() {
+		return ErrRegistrationInviteNotConfigured
+	}
 	return ConsumeRegistrationInviteHashWithTx(tx, registrationInviteHash(code), userID)
 }
 
@@ -161,6 +178,9 @@ func ConsumeRegistrationInviteWithTx(tx *gorm.DB, code string, userID int) error
 func ConsumeRegistrationInviteHashWithTx(tx *gorm.DB, codeHash string, userID int) error {
 	if codeHash == "" {
 		return ErrRegistrationInviteRequired
+	}
+	if !registrationInviteConfigured() {
+		return ErrRegistrationInviteNotConfigured
 	}
 	if userID <= 0 {
 		return ErrRegistrationInviteInvalid
@@ -192,12 +212,17 @@ func ConsumeRegistrationInviteHashWithTx(tx *gorm.DB, codeHash string, userID in
 }
 
 // ClaimRegistrationInviteForQQ assigns one available invite to one QQ open id.
-// The unique nullable column prevents duplicate claims for the same QQ user,
-// while the compare-and-swap update also protects SQLite's lock-free reads.
+// If the administrator-managed pool is empty, it creates and claims a new
+// invite in the same transaction. The unique nullable column prevents
+// duplicate claims for the same QQ user, while the compare-and-swap update
+// also protects SQLite's lock-free reads.
 func ClaimRegistrationInviteForQQ(openID string) (string, error) {
 	openID = strings.TrimSpace(openID)
-	if openID == "" || len(openID) > 128 || registrationInviteSecret() == "" {
+	if openID == "" || len(openID) > 128 {
 		return "", ErrRegistrationInviteInvalid
+	}
+	if !registrationInviteConfigured() {
+		return "", ErrRegistrationInviteNotConfigured
 	}
 	openIDHash := registrationQQOpenIDHash(openID)
 	var code string
@@ -217,11 +242,13 @@ func ClaimRegistrationInviteForQQ(openID string) (string, error) {
 		var invite RegistrationInvite
 		query := lockForUpdate(tx).
 			Where("status = ? AND claimed_qq_open_id_hash IS NULL", RegistrationInviteStatusEnabled).
-			Where("(expires_at = 0 OR expires_at >= ?)", time.Now().Unix()).
+			Where("(expires_at = 0 OR expires_at > ?)", time.Now().Unix()).
 			Order("id ASC")
 		if err := query.First(&invite).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrRegistrationInviteInvalid
+				claimedAt := time.Now().Unix()
+				code, err = createRegistrationInviteTx(tx, 0, RegistrationInviteStatusClaimed, &openIDHash, claimedAt, 0)
+				return err
 			}
 			return err
 		}
@@ -292,6 +319,9 @@ func VerifyRegistrationInvite(code string) error {
 	code = normalizeRegistrationInviteCode(code)
 	if code == "" {
 		return ErrRegistrationInviteRequired
+	}
+	if !registrationInviteConfigured() {
+		return ErrRegistrationInviteNotConfigured
 	}
 	var invite RegistrationInvite
 	if err := DB.Where("code_hash = ?", registrationInviteHash(code)).First(&invite).Error; err != nil {

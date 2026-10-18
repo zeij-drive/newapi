@@ -42,8 +42,15 @@ func TestRegistrationInviteClaimIsIdempotentAndUnique(t *testing.T) {
 	secondClaim, err := ClaimRegistrationInviteForQQ("qq-openid-b")
 	require.NoError(t, err)
 	assert.NotEqual(t, firstClaim, secondClaim)
-	_, err = ClaimRegistrationInviteForQQ("qq-openid-c")
-	require.ErrorIs(t, err, ErrRegistrationInviteInvalid)
+	autoClaim, err := ClaimRegistrationInviteForQQ("qq-openid-c")
+	require.NoError(t, err)
+	assert.NotEqual(t, firstClaim, autoClaim)
+	assert.NotEqual(t, secondClaim, autoClaim)
+	require.NoError(t, VerifyRegistrationInvite(autoClaim))
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return ConsumeRegistrationInviteWithTx(tx, strings.ToLower(autoClaim), 9)
+	}))
+	require.ErrorIs(t, VerifyRegistrationInvite(autoClaim), ErrRegistrationInviteUsed)
 }
 
 func TestRegistrationInviteConsumeIsSingleUseAndRollsBackWithTransaction(t *testing.T) {

@@ -48,7 +48,7 @@ func (bot *Bot) C2CMessageHandler() event.C2CMessageEventHandler {
 			code, err := bot.claimer.Claim(ctx, message.Author.ID)
 			cancel()
 			if err != nil {
-				content = "暂时没有可领取的邀请码，请稍后再试或联系管理员。"
+				content = "邀请码生成失败，请稍后重试。"
 			} else {
 				content = "StarryAPI 注册邀请码：\n" + code + "\n该 QQ 账号重复领取时会返回同一个邀请码。"
 			}

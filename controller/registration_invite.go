@@ -18,10 +18,15 @@ func isRegistrationInviteError(err error) bool {
 		errors.Is(err, model.ErrRegistrationInviteInvalid) ||
 		errors.Is(err, model.ErrRegistrationInviteExpired) ||
 		errors.Is(err, model.ErrRegistrationInviteUsed) ||
-		errors.Is(err, model.ErrRegistrationInviteDisabled)
+		errors.Is(err, model.ErrRegistrationInviteDisabled) ||
+		errors.Is(err, model.ErrRegistrationInviteNotConfigured)
 }
 
 func writeRegistrationInviteError(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrRegistrationInviteNotConfigured) {
+		common.ApiError(c, err)
+		return
+	}
 	key := "user.registration_invite_invalid"
 	switch {
 	case errors.Is(err, model.ErrRegistrationInviteRequired):
@@ -126,7 +131,7 @@ func ClaimRegistrationInviteForQQ(c *gin.Context) {
 	code, err := model.ClaimRegistrationInviteForQQ(request.OpenID)
 	if err != nil {
 		if errors.Is(err, model.ErrRegistrationInviteInvalid) {
-			common.ApiErrorMsg(c, "暂无可用邀请码或该 QQ 用户已领取")
+			common.ApiErrorMsg(c, "邀请码生成失败，请稍后重试")
 			return
 		}
 		common.ApiError(c, err)

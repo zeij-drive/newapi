@@ -105,5 +105,5 @@ func TestC2CMessageHandlerReportsUnavailableInvite(t *testing.T) {
 	}))
 	require.Equal(t, 1, claimer.calls)
 	require.NotEmpty(t, sender.content)
-	require.True(t, strings.Contains(sender.content, "联系管理员"))
+	require.True(t, strings.Contains(sender.content, "邀请码生成失败"))
 }

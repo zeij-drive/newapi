@@ -1,6 +1,6 @@
 # StarryAPI QQ bot
 
-This standalone Go service receives QQ Bot webhook events, responds to `/sapi` with help, and lets each QQ open ID claim its own registration invitation with `/sapi 邀请码`.
+This standalone Go service receives QQ Bot webhook events, responds to `/sapi` with help, and lets each QQ open ID obtain its own registration invitation with `/sapi 邀请码`. If no administrator-created invitation is available, NewAPI generates one atomically for the bot request.
 
 ## Prerequisites
 
@@ -11,12 +11,26 @@ This standalone Go service receives QQ Bot webhook events, responds to `/sapi` w
 
 ## NewAPI setup
 
-1. Start NewAPI and open **System Settings → Authentication → Registration invitations**.
-2. Create invitation codes. Each code can register one account.
-3. Enable **Require registration invitation** in **Basic Authentication** if all new accounts must provide a code.
-4. Set `STARRY_API_BOT_SECRET` in the NewAPI service environment and restart NewAPI. Generate a separate random value for this integration; do not use the QQ App Secret.
+1. Start NewAPI and open **System Settings → Authentication → Registration invitations** if you want to pre-create administrator-managed codes.
+2. Enable **Require registration invitation** in **Basic Authentication** if all new accounts must provide a code.
+3. Set `STARRY_API_BOT_SECRET` in the NewAPI service environment and restart NewAPI. Generate a separate random value for this integration; do not use the QQ App Secret.
 
 NewAPI encrypts recoverable invitation codes using its persisted configuration-encryption key. QQ open IDs are stored as keyed digests, and each QQ open ID is assigned no more than one invitation.
+
+## Start with NewAPI
+
+The NewAPI binary can supervise the QQ Bot process. When `QQ_BOT_APP_ID` is set, automatic startup is enabled by default. Set `QQ_BOT_AUTO_START=false` to keep the bot standalone, or set it to `true` to make the intent explicit. The supervisor looks for `QQ_BOT_BINARY`, `/qqbot` in the container image, or `qqbot` beside the NewAPI binary. It passes the same environment to the child process and stops it when NewAPI shuts down.
+
+For a source checkout, build the bot first:
+
+```powershell
+cd qqbot
+go build -o qqbot.exe .
+cd ..
+go run main.go
+```
+
+For Docker builds, the image contains `/new-api` and `/qqbot`; configure the QQ variables on the `new-api` container and both services start together.
 
 ## Configure the QQ bot
 
