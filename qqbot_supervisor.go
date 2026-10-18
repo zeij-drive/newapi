@@ -81,6 +81,9 @@ func resolveQQBotBinary() (string, error) {
 	}
 
 	candidates := []string{"qqbot"}
+	if runtime.GOOS != "windows" {
+		candidates = append([]string{"/usr/local/bin/qqbot"}, candidates...)
+	}
 	if runtime.GOOS == "windows" {
 		candidates = append([]string{"qqbot.exe"}, candidates...)
 	}

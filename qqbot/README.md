@@ -19,7 +19,7 @@ NewAPI encrypts recoverable invitation codes using its persisted configuration-e
 
 ## Start with NewAPI
 
-The NewAPI binary can supervise the QQ Bot process. When `QQ_BOT_APP_ID` is set, automatic startup is enabled by default. Set `QQ_BOT_AUTO_START=false` to keep the bot standalone, or set it to `true` to make the intent explicit. The supervisor looks for `QQ_BOT_BINARY`, `/qqbot` in the container image, or `qqbot` beside the NewAPI binary. It passes the same environment to the child process and stops it when NewAPI shuts down.
+The NewAPI binary can supervise the QQ Bot process. When `QQ_BOT_APP_ID` is set, automatic startup is enabled by default. Set `QQ_BOT_AUTO_START=false` to keep the bot standalone, or set it to `true` to make the intent explicit. The container provides `/usr/local/bin/qqbot` as the canonical path and keeps `/qqbot` as a compatibility path. The supervisor also looks for `QQ_BOT_BINARY` or `qqbot` beside the NewAPI binary. It passes the same environment to the child process and stops it when NewAPI shuts down.
 
 For a source checkout, build the bot first:
 

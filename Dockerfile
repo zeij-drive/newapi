@@ -37,8 +37,10 @@ RUN apt-get update \
     && update-ca-certificates
 
 COPY --from=builder2 /build/new-api /
+COPY --from=builder2 /build/qqbot /usr/local/bin/qqbot
 COPY --from=builder2 /build/qqbot /qqbot
-RUN chmod 0755 /new-api /qqbot && test -x /new-api && test -x /qqbot
+RUN chmod 0755 /new-api /usr/local/bin/qqbot /qqbot && \
+    test -x /new-api && test -x /usr/local/bin/qqbot && test -x /qqbot
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 EXPOSE 3000
 WORKDIR /data
