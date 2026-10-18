@@ -38,6 +38,7 @@ RUN apt-get update \
 
 COPY --from=builder2 /build/new-api /
 COPY --from=builder2 /build/qqbot /qqbot
+RUN chmod 0755 /new-api /qqbot && test -x /new-api && test -x /qqbot
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 EXPOSE 3000
 WORKDIR /data
