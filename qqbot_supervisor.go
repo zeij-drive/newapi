@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 type managedQQBot struct {
@@ -45,7 +47,11 @@ func startManagedQQBot() (*managedQQBot, error) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- command.Wait()
+		waitErr := command.Wait()
+		if waitErr != nil && ctx.Err() == nil {
+			common.SysError(fmt.Sprintf("QQ Bot process exited unexpectedly: %v", waitErr))
+		}
+		done <- waitErr
 	}()
 	return &managedQQBot{cancel: cancel, done: done}, nil
 }

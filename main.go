@@ -217,8 +217,7 @@ func main() {
 	}
 	qqBot, err := startManagedQQBot()
 	if err != nil {
-		common.FatalLog("failed to start QQ Bot: " + err.Error())
-		return
+		common.SysError("failed to start QQ Bot; NewAPI will continue without it: " + err.Error())
 	}
 	defer qqBot.stop(5 * time.Second)
 
