@@ -63,7 +63,19 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
-	code := c.Query("code")
+	var request struct {
+		Code       string `json:"code"`
+		InviteCode string `json:"invite_code"`
+	}
+	if c.Request.Method == http.MethodGet {
+		request.Code = c.Query("code")
+	} else if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的请求"})
+		return
+	}
+	request.Code = strings.TrimSpace(request.Code)
+	request.InviteCode = strings.TrimSpace(request.InviteCode)
+	code := request.Code
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -93,12 +105,24 @@ func WeChatAuth(c *gin.Context) {
 		}
 	} else {
 		if common.RegisterEnabled {
+			inviteCode := ""
+			if common.RegistrationInviteRequired {
+				if err := model.VerifyRegistrationInvite(request.InviteCode); err != nil {
+					writeRegistrationInviteError(c, err)
+					return
+				}
+				inviteCode = request.InviteCode
+			}
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
 			user.DisplayName = "WeChat User"
 			user.Role = common.RoleCommonUser
 			user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(0); err != nil {
+			if err := user.InsertWithInvite(0, inviteCode); err != nil {
+				if isRegistrationInviteError(err) {
+					writeRegistrationInviteError(c, err)
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),

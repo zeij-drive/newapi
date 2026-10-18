@@ -93,6 +93,7 @@ type User struct {
 	WeChatId             string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
 	TelegramId           string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
 	VerificationCode     string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	InviteCode           string                     `json:"invite_code" gorm:"-:all" validate:"max=128"`            // one-time registration invite, never persisted
 	AccessToken          *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // Deprecated: 旧版面板访问令牌，仅在升级后的过渡期内使用；删除 users.access_token 列时一并移除。
 	AccessTokenCreatedAt *int64                     `json:"-" gorm:"type:bigint;column:access_token_created_at"`    // Deprecated: 旧版面板访问令牌，仅在升级后的过渡期内使用；删除 users.access_token 列时一并移除。
 	Quota                int                        `json:"quota" gorm:"type:int;default:0"`
@@ -675,6 +676,12 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 }
 
 func (user *User) Insert(inviterId int) error {
+	return user.InsertWithInvite(inviterId, "")
+}
+
+// InsertWithInvite creates a password or provider user and consumes the
+// registration invite in the same transaction when one is supplied.
+func (user *User) InsertWithInvite(inviterId int, inviteCode string) error {
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 			if err := user.prepareForInsert(tx); err != nil {
@@ -690,7 +697,15 @@ func (user *User) Insert(inviterId int) error {
 				user.SetSetting(defaultSetting)
 			}
 
-			return tx.Create(user).Error
+			if err := tx.Create(user).Error; err != nil {
+				return err
+			}
+			if common.RegistrationInviteRequired || inviteCode != "" {
+				if err := ConsumeRegistrationInviteWithTx(tx, inviteCode, user.Id); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}); err != nil {
 		return err
@@ -740,6 +755,23 @@ func (user *User) FinishInsert(inviterId int) {
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
+	return user.insertWithTx(tx, inviterId)
+}
+
+// InsertWithTxAndInvite is the OAuth equivalent of InsertWithInvite. The
+// caller owns the surrounding transaction so provider binding and invite
+// consumption commit or roll back together.
+func (user *User) InsertWithTxAndInvite(tx *gorm.DB, inviterId int, inviteCode string) error {
+	if err := user.insertWithTx(tx, inviterId); err != nil {
+		return err
+	}
+	if common.RegistrationInviteRequired || inviteCode != "" {
+		return ConsumeRegistrationInviteWithTx(tx, inviteCode, user.Id)
+	}
+	return nil
+}
+
+func (user *User) insertWithTx(tx *gorm.DB, inviterId int) error {
 	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
@@ -755,6 +787,18 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 
 		return tx.Create(user).Error
 	})
+}
+
+// InsertWithTxAndInviteHash allows OAuth registration to carry only the
+// keyed invite digest inside the short-lived OAuth state record.
+func (user *User) InsertWithTxAndInviteHash(tx *gorm.DB, inviterId int, inviteCodeHash string) error {
+	if err := user.insertWithTx(tx, inviterId); err != nil {
+		return err
+	}
+	if common.RegistrationInviteRequired || inviteCodeHash != "" {
+		return ConsumeRegistrationInviteHashWithTx(tx, inviteCodeHash, user.Id)
+	}
+	return nil
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.

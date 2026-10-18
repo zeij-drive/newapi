@@ -35,6 +35,7 @@ export const registerFormSchema = z
     email: z.string().optional(),
     password: accountPasswordSchema,
     confirmPassword: z.string().min(1, 'Please confirm your password'),
+    inviteCode: z.string().optional(),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords don't match.",

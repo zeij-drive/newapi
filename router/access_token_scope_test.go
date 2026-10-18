@@ -38,6 +38,7 @@ var accessTokenExemptRoutes = []string{
 	"GET /api/verification",
 	"GET /api/reset_password",
 	"POST /api/user/reset",
+	"POST /api/bot/registration-invite",
 	"POST /api/user/register",
 	"GET /api/user/login/encryption-key",
 	"POST /api/user/login",
@@ -48,6 +49,7 @@ var accessTokenExemptRoutes = []string{
 	"POST /api/user/passkey/login/begin",
 	"POST /api/user/passkey/login/finish",
 	"GET /api/oauth/wechat",
+	"POST /api/oauth/wechat",
 	"GET /api/oauth/telegram/login",
 	"GET /api/oauth/telegram/bind/:flow_token",
 

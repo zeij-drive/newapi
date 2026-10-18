@@ -58,6 +58,53 @@ export async function updateEpayGateways(gateways: Array<EpayGatewayView & { key
   return res.data
 }
 
+export interface RegistrationInviteRecord {
+  id: number
+  code_prefix: string
+  status: number
+  claimed_at: number
+  used_user_id: number
+  used_at: number
+  expires_at: number
+  created_at: number
+}
+
+export async function listRegistrationInvites(page = 1) {
+  const res = await api.get<{
+    success: boolean
+    message: string
+    data: {
+      page: number
+      page_size: number
+      total: number
+      items: RegistrationInviteRecord[]
+    }
+  }>('/api/option/registration-invites', {
+    params: { p: page, page_size: 25 },
+  })
+  return res.data
+}
+
+export async function createRegistrationInvites(count: number) {
+  const res = await api.post<{
+    success: boolean
+    message: string
+    data: string[]
+  }>('/api/option/registration-invites', { count })
+  return res.data
+}
+
+export async function updateRegistrationInviteStatus(
+  id: number,
+  status: number
+) {
+  const res = await api.patch<{ success: boolean; message: string }>(
+    `/api/option/registration-invites/${id}`,
+    { status }
+  )
+  return res.data
+}
+
 export async function getSystemOptions() {
   const res = await api.get<SystemOptionsResponse>('/api/option/')
   return res.data
