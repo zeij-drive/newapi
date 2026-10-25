@@ -205,3 +205,31 @@ describe('infinite canvas sidebar entry', () => {
     )
   })
 })
+
+describe('invitation rewards sidebar entry', () => {
+  it('shows the invitation rewards route by default and hides it when disabled', () => {
+    const { result: defaultResult } = sidebarFor()
+    expect(
+      defaultResult.current.find((group) => group.id === 'admin')?.items
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Invitation rewards',
+          url: '/system-settings/billing/affiliate-rewards',
+        }),
+      ])
+    )
+
+    const config = parseSidebarModulesAdmin(
+      '{"admin":{"enabled":true,"affiliate_rewards":false}}'
+    )
+    expect(config.admin.affiliate_rewards).toBe(false)
+    const saved = parseSidebarModulesAdmin(serializeSidebarModulesAdmin(config))
+    const { result: disabledResult } = sidebarFor(saved)
+    expect(
+      disabledResult.current
+        .find((group) => group.id === 'admin')
+        ?.items.some((item) => item.title === 'Invitation rewards')
+    ).toBe(false)
+  })
+})

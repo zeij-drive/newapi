@@ -1,0 +1,4 @@
+# Local credentials and runtime token cache.
+config.php
+storage/*.json
+!storage/.gitkeep

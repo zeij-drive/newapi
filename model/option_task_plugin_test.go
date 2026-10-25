@@ -74,3 +74,21 @@ export function parseTaskResult() { return {}; }
 	assert.False(t, ok)
 	assert.Equal(t, []string{key}, jsplugin.DefaultRegistry.Snapshot().DisabledFactory)
 }
+
+func TestAffiliateRewardsEnabledOptionUpdatesRuntimeState(t *testing.T) {
+	originalEnabled := common.AffiliateRewardsEnabled
+	originalMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() {
+		common.AffiliateRewardsEnabled = originalEnabled
+		common.OptionMap = originalMap
+	})
+
+	require.NoError(t, updateOptionMap("AffiliateRewardsEnabled", "false"))
+	assert.False(t, common.AffiliateRewardsEnabled)
+	assert.Equal(t, "false", common.OptionMap["AffiliateRewardsEnabled"])
+
+	require.NoError(t, updateOptionMap("AffiliateRewardsEnabled", "true"))
+	assert.True(t, common.AffiliateRewardsEnabled)
+	assert.Equal(t, "true", common.OptionMap["AffiliateRewardsEnabled"])
+}

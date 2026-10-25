@@ -215,12 +215,6 @@ func main() {
 		Addr:    ":" + port,
 		Handler: server,
 	}
-	qqBot, err := startManagedQQBot()
-	if err != nil {
-		common.SysError("failed to start QQ Bot; NewAPI will continue without it: " + err.Error())
-	}
-	defer qqBot.stop(5 * time.Second)
-
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start HTTP server: " + err.Error())

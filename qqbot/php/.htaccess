@@ -1,0 +1,18 @@
+# StarryAPI QQ Bot PHP webhook
+# Keep this file in the PHP site's document root. The actual secrets should be
+# configured as panel environment variables or in config.php outside document root.
+<FilesMatch "^(?:\.|config.*\.php|.*\.(?:json|example))$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+RewriteEngine On
+# Preserve /qqbot (or another configured callback path) while executing PHP.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [L]

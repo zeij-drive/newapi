@@ -296,6 +296,63 @@ func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
 	assert.Empty(t, stored.Password)
 }
 
+func TestDisabledAffiliateRewardsDoNotAccrueOrTransferQuota(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	previousEnabled := common.AffiliateRewardsEnabled
+	previousInviterQuota := common.QuotaForInviter
+	previousInviteeQuota := common.QuotaForInvitee
+	previousNewUserQuota := common.QuotaForNewUser
+	common.AffiliateRewardsEnabled = false
+	common.QuotaForInviter = 1200
+	common.QuotaForInvitee = 800
+	common.QuotaForNewUser = 0
+	t.Cleanup(func() {
+		common.AffiliateRewardsEnabled = previousEnabled
+		common.QuotaForInviter = previousInviterQuota
+		common.QuotaForInvitee = previousInviteeQuota
+		common.QuotaForNewUser = previousNewUserQuota
+	})
+
+	inviter := User{
+		Username:        "affiliate-disabled-inviter",
+		Password:        "unused-password-hash",
+		Status:          common.UserStatusEnabled,
+		AffCode:         "affiliate-disabled-inviter-code",
+		AffCount:        2,
+		AffQuota:        300,
+		AffHistoryQuota: 500,
+	}
+	invitee := User{
+		Username:  "affiliate-disabled-invitee",
+		Password:  "unused-password-hash",
+		Status:    common.UserStatusEnabled,
+		AffCode:   "affiliate-disabled-invitee-code",
+		Quota:     100,
+		InviterId: 0,
+	}
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+
+	invitee.finishInsert(inviter.Id)
+
+	var storedInviter User
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Equal(t, 2, storedInviter.AffCount)
+	assert.Equal(t, 300, storedInviter.AffQuota)
+	assert.Equal(t, 500, storedInviter.AffHistoryQuota)
+	var storedInvitee User
+	require.NoError(t, DB.First(&storedInvitee, invitee.Id).Error)
+	assert.Equal(t, 100, storedInvitee.Quota)
+
+	err := storedInviter.TransferAffQuotaToQuota(common.QuotaFromFloat(common.QuotaPerUnit))
+	require.ErrorIs(t, err, ErrAffiliateRewardsDisabled)
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Equal(t, 300, storedInviter.AffQuota)
+	assert.Zero(t, storedInviter.Quota)
+}
+
 func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
 	truncateTables(t)
 

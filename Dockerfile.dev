@@ -22,9 +22,7 @@ COPY . .
 RUN mkdir -p web/dist && \
     echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/dist/index.html
 
-RUN cd qqbot && go mod download
-RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api && \
-    cd qqbot && go build -ldflags "-s -w" -o /build/qqbot
+RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
 
 FROM debian:bookworm-slim
 
@@ -34,10 +32,7 @@ RUN apt-get update \
     && update-ca-certificates
 
 COPY --from=builder /build/new-api /
-COPY --from=builder /build/qqbot /usr/local/bin/qqbot
-COPY --from=builder /build/qqbot /qqbot
-RUN chmod 0755 /new-api /usr/local/bin/qqbot /qqbot && \
-    test -x /new-api && test -x /usr/local/bin/qqbot && test -x /qqbot
+RUN chmod 0755 /new-api && test -x /new-api
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 EXPOSE 3000
 WORKDIR /data

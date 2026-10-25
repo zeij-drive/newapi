@@ -32,6 +32,11 @@ func TestReadConfigDefaultsAndValidation(t *testing.T) {
 	require.Equal(t, ":9000", settings.listenAddr)
 	require.Equal(t, "/qqbot", settings.webhookPath)
 
+	values["STARRY_API_BOT_SECRET"] = strings.Repeat("x", 31)
+	_, err = readConfig(lookup)
+	require.ErrorContains(t, err, "at least 32 characters")
+	values["STARRY_API_BOT_SECRET"] = strings.Repeat("x", 32)
+
 	values["QQ_BOT_WEBHOOK_PATH"] = "relative"
 	_, err = readConfig(lookup)
 	require.Error(t, err)

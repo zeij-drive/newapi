@@ -32,7 +32,7 @@ import { generateAffiliateLink } from '../lib'
 // Affiliate Hook
 // ============================================================================
 
-export function useAffiliate() {
+export function useAffiliate(enabled = true) {
   const [affiliateCode, setAffiliateCode] = useState<string>('')
   const [affiliateLink, setAffiliateLink] = useState<string>('')
   const [loading, setLoading] = useState(true)
@@ -85,8 +85,14 @@ export function useAffiliate() {
   }, [])
 
   useEffect(() => {
+    if (!enabled) {
+      setAffiliateCode('')
+      setAffiliateLink('')
+      setLoading(false)
+      return
+    }
     fetchAffiliateCode()
-  }, [fetchAffiliateCode])
+  }, [enabled, fetchAffiliateCode])
 
   return {
     affiliateCode,

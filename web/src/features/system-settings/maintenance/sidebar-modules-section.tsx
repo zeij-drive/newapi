@@ -160,6 +160,10 @@ export function SidebarModulesSection({
         title: t('Redeem codes'),
         description: t('Create and review invite or credit codes.'),
       },
+      affiliate_rewards: {
+        title: t('Invitation rewards'),
+        description: t('Configure referral rewards and eligibility.'),
+      },
       user: {
         title: t('Users'),
         description: t('Administer user accounts and roles.'),

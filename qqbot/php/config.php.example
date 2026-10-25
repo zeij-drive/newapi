@@ -1,0 +1,12 @@
+<?php
+// Copy to config.php outside the public document root when environment
+// variables cannot be configured by your virtual-hosting panel.
+return [
+    'qq_bot_app_id' => 'your-qq-bot-app-id',
+    'qq_bot_app_secret' => 'your-qq-bot-app-secret',
+    'new_api_url' => 'https://newapi.example.com',
+    // Must be exactly the same value configured in NewAPI.
+    'starry_api_bot_secret' => 'replace-with-a-random-secret-of-at-least-32-characters',
+    // Optional; defaults to a 0600 file in the system temp directory.
+    // 'qq_bot_token_cache_file' => '/home/USER/.cache/starryapi-qqbot-token.json',
+];

@@ -1,0 +1,23 @@
+[Unit]
+Description=StarryAPI QQ Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=starryapi-qqbot
+WorkingDirectory=/var/lib/starryapi-qqbot
+EnvironmentFile=/etc/starryapi-qqbot.env
+ExecStart=/usr/local/bin/starryapi-qqbot
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

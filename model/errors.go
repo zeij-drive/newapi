@@ -9,11 +9,12 @@ var (
 
 // User auth errors
 var (
-	ErrInvalidCredentials   = errors.New("invalid credentials")
-	ErrUserEmptyCredentials = errors.New("empty credentials")
-	ErrEmailAlreadyTaken    = errors.New("email already taken")
-	ErrEmailNotFound        = errors.New("email not found")
-	ErrEmailAmbiguous       = errors.New("email matches multiple users")
+	ErrInvalidCredentials       = errors.New("invalid credentials")
+	ErrUserEmptyCredentials     = errors.New("empty credentials")
+	ErrEmailAlreadyTaken        = errors.New("email already taken")
+	ErrEmailNotFound            = errors.New("email not found")
+	ErrEmailAmbiguous           = errors.New("email matches multiple users")
+	ErrAffiliateRewardsDisabled = errors.New("affiliate rewards are disabled")
 )
 
 // Token auth errors

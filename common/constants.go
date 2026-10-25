@@ -71,6 +71,11 @@ var TurnstileCheckEnabled = false
 var RegisterEnabled = true
 var RegistrationInviteRequired = false
 
+// AffiliateRewardsEnabled controls invitation reward accrual and transfer.
+// Keep this enabled by default so existing installations preserve behavior
+// until an administrator explicitly disables the feature.
+var AffiliateRewardsEnabled = true
+
 var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
 var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
 var EmailDomainWhitelist = []string{
