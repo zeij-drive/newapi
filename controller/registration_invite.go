@@ -1,12 +1,19 @@
 package controller
 
 import (
+	"bytes"
+	"context"
+	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -107,22 +114,131 @@ type qqBotInviteRequest struct {
 	OpenID string `json:"open_id"`
 }
 
+const (
+	qqBotTimestampHeader = "X-QQ-Bot-Timestamp"
+	qqBotNonceHeader     = "X-QQ-Bot-Nonce"
+	qqBotSignatureHeader = "X-QQ-Bot-Signature"
+	qqBotRequestPath     = "/api/bot/registration-invite"
+	qqBotTimestampSkew   = 5 * time.Minute
+	qqBotNonceTTL        = qqBotTimestampSkew * 2
+	qqBotNonceCacheLimit = 8192
+)
+
+const qqBotTimestampSkewSeconds int64 = int64(qqBotTimestampSkew / time.Second)
+
+var (
+	errQQBotRequestInvalid    = errors.New("invalid bot request")
+	errQQBotReplay            = errors.New("duplicate bot request")
+	errQQBotReplayUnavailable = errors.New("bot replay protection unavailable")
+)
+
+var qqBotNonceCache = struct {
+	sync.Mutex
+	values map[string]time.Time
+}{values: make(map[string]time.Time)}
+
+func qqBotSignature(secret, method, path, timestamp, nonce string, body []byte) []byte {
+	bodyDigest := sha256.Sum256(body)
+	canonical := fmt.Sprintf("%s\n%s\n%s\n%s\n%s", method, path, timestamp, nonce, hex.EncodeToString(bodyDigest[:]))
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(canonical))
+	return mac.Sum(nil)
+}
+
+func validateQQBotRequest(secret string, c *gin.Context, body []byte) error {
+	if len(secret) < 32 || c.Request.Method != http.MethodPost || c.Request.URL.Path != qqBotRequestPath {
+		return errQQBotRequestInvalid
+	}
+	timestamp := strings.TrimSpace(c.GetHeader(qqBotTimestampHeader))
+	nonce := strings.TrimSpace(c.GetHeader(qqBotNonceHeader))
+	signature := strings.TrimSpace(c.GetHeader(qqBotSignatureHeader))
+	if len(timestamp) < 1 || len(timestamp) > 12 || len(nonce) != 32 || len(signature) != sha256.Size*2 {
+		return errQQBotRequestInvalid
+	}
+	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
+	now := time.Now().Unix()
+	if err != nil || issuedAt < 1 || strconv.FormatInt(issuedAt, 10) != timestamp || issuedAt < now-qqBotTimestampSkewSeconds || issuedAt > now+qqBotTimestampSkewSeconds {
+		return errQQBotRequestInvalid
+	}
+	if nonce != strings.ToLower(nonce) {
+		return errQQBotRequestInvalid
+	}
+	if _, err := hex.DecodeString(nonce); err != nil {
+		return errQQBotRequestInvalid
+	}
+	provided, err := hex.DecodeString(signature)
+	if err != nil || len(provided) != sha256.Size {
+		return errQQBotRequestInvalid
+	}
+	expected := qqBotSignature(secret, c.Request.Method, qqBotRequestPath, timestamp, nonce, body)
+	if !hmac.Equal(provided, expected) {
+		return errQQBotRequestInvalid
+	}
+	return reserveQQBotNonce(nonce)
+}
+
+func reserveQQBotNonce(nonce string) error {
+	if common.RedisEnabled {
+		if common.RDB == nil {
+			return errQQBotReplayUnavailable
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		ok, err := common.RDB.SetNX(ctx, "newapi:qqbot:nonce:"+nonce, "1", qqBotNonceTTL).Result()
+		if err != nil {
+			return errQQBotReplayUnavailable
+		}
+		if !ok {
+			return errQQBotReplay
+		}
+		return nil
+	}
+
+	now := time.Now()
+	qqBotNonceCache.Lock()
+	defer qqBotNonceCache.Unlock()
+	for value, expiresAt := range qqBotNonceCache.values {
+		if !expiresAt.After(now) {
+			delete(qqBotNonceCache.values, value)
+		}
+	}
+	if _, exists := qqBotNonceCache.values[nonce]; exists {
+		return errQQBotReplay
+	}
+	if len(qqBotNonceCache.values) >= qqBotNonceCacheLimit {
+		return errQQBotReplayUnavailable
+	}
+	qqBotNonceCache.values[nonce] = now.Add(qqBotNonceTTL)
+	return nil
+}
+
 // ClaimRegistrationInviteForQQ is an internal endpoint for the standalone QQ
-// bot. The bot secret is kept outside the database and compared in constant
-// time by the middleware-style handler below.
+// bot. It requires a short-lived HMAC request signature and a single-use nonce;
+// the OpenID is therefore bound to the authenticated request body.
 func ClaimRegistrationInviteForQQ(c *gin.Context) {
 	configured := strings.TrimSpace(common.GetEnvOrDefaultString("STARRY_API_BOT_SECRET", ""))
-	provided := c.GetHeader("X-QQ-Bot-Secret")
-	if len(configured) < 32 || provided == "" || len(provided) > 256 {
+	if len(configured) < 32 {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未授权"})
 		return
 	}
-	configuredHash := sha256.Sum256([]byte(configured))
-	providedHash := sha256.Sum256([]byte(provided))
-	if subtle.ConstantTimeCompare(providedHash[:], configuredHash[:]) != 1 {
+	if c.Request.Body == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的请求体"})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20+1))
+	if err != nil || len(body) > 1<<20 {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "请求体过大"})
+		return
+	}
+	if err := validateQQBotRequest(configured, c, body); err != nil {
+		if errors.Is(err, errQQBotReplayUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "服务暂不可用"})
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未授权"})
 		return
 	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	var request qqBotInviteRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		common.ApiErrorMsg(c, "无效的参数")

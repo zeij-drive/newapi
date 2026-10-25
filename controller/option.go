@@ -210,7 +210,7 @@ func UpdateOption(c *gin.Context) {
 	case operation_setting.UsageRankingRewardsOptionKey:
 		common.ApiErrorMsg(c, "排行榜奖励只能通过专用设置接口修改")
 		return
-	case "QuotaForInviter", "QuotaForInvitee":
+	case "QuotaForInviter", "QuotaForInvitee", "AffiliateRewardPercent":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
 			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 			return

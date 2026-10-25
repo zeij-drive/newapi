@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -214,6 +215,216 @@ func TestRechargeEpayCreditsQuotaExactlyOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, alreadyDone)
 	assert.Equal(t, 2*500000, getUserQuotaForPaymentGuardTest(t, user.Id))
+}
+
+func TestRechargeEpayAffiliateRewardPercentAndIdempotency(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldAffiliateEnabled := common.AffiliateRewardsEnabled
+	oldRewardPercent := common.AffiliateRewardPercent
+	paymentSetting := operation_setting.GetPaymentSetting()
+	oldComplianceConfirmed := paymentSetting.ComplianceConfirmed
+	oldComplianceTermsVersion := paymentSetting.ComplianceTermsVersion
+	common.QuotaPerUnit = 500000
+	common.AffiliateRewardsEnabled = true
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		common.AffiliateRewardsEnabled = oldAffiliateEnabled
+		common.AffiliateRewardPercent = oldRewardPercent
+		paymentSetting.ComplianceConfirmed = oldComplianceConfirmed
+		paymentSetting.ComplianceTermsVersion = oldComplianceTermsVersion
+	})
+
+	testCases := []struct {
+		name          string
+		percent       float64
+		withInviter   bool
+		wantReward    int
+		checkRepeated bool
+	}{
+		{name: "zero percent", percent: 0},
+		{name: "percentage reward", percent: 12.5, withInviter: true, wantReward: 125000, checkRepeated: true},
+		{name: "full reward", percent: 100, withInviter: true, wantReward: 1000000},
+		{name: "no inviter", percent: 100},
+	}
+
+	for index, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			common.AffiliateRewardPercent = tc.percent
+
+			invitee := &User{
+				Id:       800 + index*2,
+				Username: "affiliate-reward-invitee-" + tc.name,
+				Status:   common.UserStatusEnabled,
+				AffCode:  "affiliate-reward-invitee-code-" + tc.name,
+			}
+			if tc.withInviter {
+				inviter := &User{
+					Id:       invitee.Id - 1,
+					Username: "affiliate-reward-inviter-" + tc.name,
+					Status:   common.UserStatusEnabled,
+					AffCode:  "affiliate-reward-inviter-code-" + tc.name,
+				}
+				require.NoError(t, DB.Create(inviter).Error)
+				invitee.InviterId = inviter.Id
+			}
+			require.NoError(t, DB.Create(invitee).Error)
+			order := createEpayTestOrder(t, invitee.Id, "EPAY-AFFILIATE-"+tc.name, PaymentProviderEpay, common.TopUpStatusPending)
+
+			alreadyDone, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
+			require.NoError(t, err)
+			assert.False(t, alreadyDone)
+			assert.Equal(t, 1000000, getUserQuotaForPaymentGuardTest(t, invitee.Id))
+
+			if tc.withInviter {
+				var storedInviter User
+				require.NoError(t, DB.First(&storedInviter, invitee.InviterId).Error)
+				assert.Equal(t, tc.wantReward, storedInviter.AffQuota)
+				assert.Equal(t, tc.wantReward, storedInviter.AffHistoryQuota)
+			}
+
+			if tc.checkRepeated {
+				alreadyDone, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
+				require.NoError(t, err)
+				assert.True(t, alreadyDone)
+				var storedInviter User
+				require.NoError(t, DB.First(&storedInviter, invitee.InviterId).Error)
+				assert.Equal(t, tc.wantReward, storedInviter.AffQuota)
+				assert.Equal(t, tc.wantReward, storedInviter.AffHistoryQuota)
+			}
+		})
+	}
+}
+
+func TestAffiliateTopUpRewardsAreAppliedToEverySettlementPath(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldAffiliateEnabled := common.AffiliateRewardsEnabled
+	oldRewardPercent := common.AffiliateRewardPercent
+	paymentSetting := operation_setting.GetPaymentSetting()
+	oldComplianceConfirmed := paymentSetting.ComplianceConfirmed
+	oldComplianceTermsVersion := paymentSetting.ComplianceTermsVersion
+	common.QuotaPerUnit = 500000
+	common.AffiliateRewardsEnabled = true
+	common.AffiliateRewardPercent = 12.5
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		common.AffiliateRewardsEnabled = oldAffiliateEnabled
+		common.AffiliateRewardPercent = oldRewardPercent
+		paymentSetting.ComplianceConfirmed = oldComplianceConfirmed
+		paymentSetting.ComplianceTermsVersion = oldComplianceTermsVersion
+	})
+
+	testCases := []struct {
+		name          string
+		provider      string
+		amount        int64
+		money         float64
+		settle        func(string) error
+		retryHasError bool
+	}{
+		{
+			name:     "epay",
+			provider: PaymentProviderEpay,
+			amount:   2,
+			money:    10,
+			settle: func(tradeNo string) error {
+				_, err := RechargeEpay(tradeNo, "alipay", "127.0.0.1")
+				return err
+			},
+		},
+		{
+			name:          "stripe",
+			provider:      PaymentProviderStripe,
+			amount:        2,
+			money:         2,
+			settle:        func(tradeNo string) error { return Recharge(tradeNo, "stripe-customer", "127.0.0.1") },
+			retryHasError: true,
+		},
+		{
+			name:          "creem",
+			provider:      PaymentProviderCreem,
+			amount:        1_000_000,
+			money:         10,
+			settle:        func(tradeNo string) error { return RechargeCreem(tradeNo, "", "", "127.0.0.1") },
+			retryHasError: true,
+		},
+		{
+			name:     "waffo",
+			provider: PaymentProviderWaffo,
+			amount:   2,
+			money:    10,
+			settle:   func(tradeNo string) error { return RechargeWaffo(tradeNo, "127.0.0.1") },
+		},
+		{
+			name:     "waffo pancake",
+			provider: PaymentProviderWaffoPancake,
+			amount:   2,
+			money:    10,
+			settle:   RechargeWaffoPancake,
+		},
+		{
+			name:     "manual completion",
+			provider: PaymentProviderEpay,
+			amount:   2,
+			money:    10,
+			settle:   func(tradeNo string) error { return ManualCompleteTopUp(tradeNo, "127.0.0.1") },
+		},
+	}
+
+	for index, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			inviter := &User{
+				Id:       900 + index*2,
+				Username: "affiliate-settlement-inviter-" + tc.name,
+				Status:   common.UserStatusEnabled,
+				AffCode:  "affiliate-settlement-inviter-code-" + tc.name,
+			}
+			invitee := &User{
+				Id:        inviter.Id + 1,
+				Username:  "affiliate-settlement-invitee-" + tc.name,
+				Status:    common.UserStatusEnabled,
+				AffCode:   "affiliate-settlement-invitee-code-" + tc.name,
+				InviterId: inviter.Id,
+			}
+			require.NoError(t, DB.Create(inviter).Error)
+			require.NoError(t, DB.Create(invitee).Error)
+
+			tradeNo := "AFFILIATE-SETTLEMENT-" + tc.name
+			order := &TopUp{
+				UserId:          invitee.Id,
+				Amount:          tc.amount,
+				Money:           tc.money,
+				TradeNo:         tradeNo,
+				PaymentMethod:   "alipay",
+				PaymentProvider: tc.provider,
+				Status:          common.TopUpStatusPending,
+			}
+			require.NoError(t, order.Insert())
+
+			require.NoError(t, tc.settle(tradeNo))
+			assert.Equal(t, 1000000, getUserQuotaForPaymentGuardTest(t, invitee.Id))
+			var storedInviter User
+			require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+			assert.Equal(t, 125000, storedInviter.AffQuota)
+			assert.Equal(t, 125000, storedInviter.AffHistoryQuota)
+
+			retryErr := tc.settle(tradeNo)
+			if tc.retryHasError {
+				require.Error(t, retryErr)
+			} else {
+				require.NoError(t, retryErr)
+			}
+			assert.Equal(t, 1000000, getUserQuotaForPaymentGuardTest(t, invitee.Id))
+			require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+			assert.Equal(t, 125000, storedInviter.AffQuota)
+			assert.Equal(t, 125000, storedInviter.AffHistoryQuota)
+		})
+	}
 }
 
 func TestRechargeEpayKeepsRedisAndDatabaseCreditInSync(t *testing.T) {

@@ -82,8 +82,7 @@ const BILLING_SECTIONS = [
       <AffiliateRewardsSection
         defaultValues={{
           AffiliateRewardsEnabled: settings.AffiliateRewardsEnabled,
-          QuotaForInviter: settings.QuotaForInviter,
-          QuotaForInvitee: settings.QuotaForInvitee,
+          AffiliateRewardPercent: settings.AffiliateRewardPercent,
         }}
         complianceConfirmed={
           (settings['payment_setting.compliance_confirmed'] ?? false) &&

@@ -51,6 +51,12 @@ func TestRegistrationInviteClaimIsIdempotentAndUnique(t *testing.T) {
 		return ConsumeRegistrationInviteWithTx(tx, strings.ToLower(autoClaim), 9)
 	}))
 	require.ErrorIs(t, VerifyRegistrationInvite(autoClaim), ErrRegistrationInviteUsed)
+	repeatedClaim, err := ClaimRegistrationInviteForQQ("qq-openid-c")
+	require.NoError(t, err)
+	assert.Equal(t, autoClaim, repeatedClaim)
+	var claimedInviteCount int64
+	require.NoError(t, DB.Model(&RegistrationInvite{}).Where("claimed_qq_open_id_hash = ?", registrationQQOpenIDHash("qq-openid-c")).Count(&claimedInviteCount).Error)
+	assert.EqualValues(t, 1, claimedInviteCount)
 }
 
 func TestRegistrationInviteConsumeIsSingleUseAndRollsBackWithTransaction(t *testing.T) {

@@ -229,8 +229,12 @@ func ClaimRegistrationInviteForQQ(openID string) (string, error) {
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var existing RegistrationInvite
 		if err := lockForUpdate(tx).Where("claimed_qq_open_id_hash = ?", openIDHash).First(&existing).Error; err == nil {
-			if err := registrationInviteUsable(&existing, time.Now().Unix()); err != nil {
-				return err
+			// A QQ OpenID keeps its original code. Returning it after consumption
+			// is idempotent and never re-enables the invite.
+			if existing.Status != RegistrationInviteStatusUsed {
+				if err := registrationInviteUsable(&existing, time.Now().Unix()); err != nil {
+					return err
+				}
 			}
 			var decryptErr error
 			code, decryptErr = existing.plaintextCode()
@@ -271,10 +275,11 @@ func ClaimRegistrationInviteForQQ(openID string) (string, error) {
 	})
 	if err != nil {
 		// If a duplicate callback raced the first claim, return the same invite
-		// rather than allocating another one to the same QQ user.
+		// rather than allocating another one to the same QQ user. Registration
+		// still checks the invite's current status.
 		var existing RegistrationInvite
 		if lookupErr := DB.Where("claimed_qq_open_id_hash = ?", openIDHash).First(&existing).Error; lookupErr == nil {
-			if usableErr := registrationInviteUsable(&existing, time.Now().Unix()); usableErr == nil {
+			if existing.Status == RegistrationInviteStatusUsed || registrationInviteUsable(&existing, time.Now().Unix()) == nil {
 				return existing.plaintextCode()
 			}
 		}

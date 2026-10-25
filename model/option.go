@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"maps"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -145,6 +146,7 @@ func InitOptionMap() {
 	common.OptionMap["TurnstileSiteKey"] = ""
 	common.OptionMap["TurnstileSecretKey"] = ""
 	common.OptionMap["QuotaForNewUser"] = strconv.Itoa(common.QuotaForNewUser)
+	common.OptionMap["AffiliateRewardPercent"] = strconv.FormatFloat(common.AffiliateRewardPercent, 'f', -1, 64)
 	common.OptionMap["QuotaForInviter"] = strconv.Itoa(common.QuotaForInviter)
 	common.OptionMap["QuotaForInvitee"] = strconv.Itoa(common.QuotaForInvitee)
 	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
@@ -254,6 +256,11 @@ func validateOptionValue(key string, value string) error {
 	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
 		return err
 	}
+	if key == "AffiliateRewardPercent" {
+		if _, err := parseAffiliateRewardPercent(value); err != nil {
+			return err
+		}
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -264,6 +271,14 @@ func validateOptionValue(key string, value string) error {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
 	return nil
+}
+
+func parseAffiliateRewardPercent(value string) (float64, error) {
+	percent, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 100 {
+		return 0, errors.New("AffiliateRewardPercent must be a number between 0 and 100")
+	}
+	return percent, nil
 }
 
 func UpdateOption(key string, value string) error {
@@ -363,6 +378,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	var affiliateRewardPercent float64
+	if key == "AffiliateRewardPercent" {
+		affiliateRewardPercent, err = parseAffiliateRewardPercent(value)
+		if err != nil {
+			return err
+		}
+	}
 	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey || key == configEncryptionSecretOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -640,6 +662,8 @@ func updateOptionMap(key string, value string) (err error) {
 		common.TurnstileSecretKey = value
 	case "QuotaForNewUser":
 		common.QuotaForNewUser, _ = strconv.Atoi(value)
+	case "AffiliateRewardPercent":
+		common.AffiliateRewardPercent = affiliateRewardPercent
 	case "QuotaForInviter":
 		common.QuotaForInviter, _ = strconv.Atoi(value)
 	case "QuotaForInvitee":

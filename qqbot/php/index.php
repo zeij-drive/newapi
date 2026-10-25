@@ -71,10 +71,16 @@ function requestHeader(string $name): string
     return trim((string) ($_SERVER[$serverName] ?? ''));
 }
 
-/** @return array{status:int, body:string} */
-function httpJsonRequest(string $method, string $url, array $headers, ?array $payload, int $timeoutSeconds = 5): array
+/** @param array<string, mixed>|null|string $payload
+ *  @return array{status:int, body:string}
+ */
+function httpJsonRequest(string $method, string $url, array $headers, $payload, int $timeoutSeconds = 5): array
 {
-    $body = $payload === null ? null : json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    $body = $payload === null
+        ? null
+        : (is_string($payload)
+            ? $payload
+            : json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
     $headerLines = $headers;
     if ($body !== null) {
         $headerLines[] = 'Content-Length: ' . strlen($body);
@@ -264,13 +270,32 @@ function getQQAccessToken(array $settings): string
     }
 }
 
+/** Sign the exact HTTP body using the bot-to-NewAPI request protocol. */
+function signInviteRequest(string $secret, string $method, string $path, string $timestamp, string $nonce, string $body): string
+{
+    $bodyDigest = hash('sha256', $body);
+    $canonical = implode("\n", [$method, $path, $timestamp, $nonce, $bodyDigest]);
+    return hash_hmac('sha256', $canonical, $secret);
+}
+
 /** @param array<string, mixed> $settings */
 function claimInvite(array $settings, string $openID): string
 {
+    $path = '/api/bot/registration-invite';
+    $body = json_encode(['open_id' => $openID], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    $timestamp = (string) time();
+    try {
+        $nonce = bin2hex(random_bytes(16));
+    } catch (Throwable $error) {
+        throw new RuntimeException('could not create invite request', 0, $error);
+    }
+    $requestSignature = signInviteRequest($settings['bot_secret'], 'POST', $path, $timestamp, $nonce, $body);
     $response = httpJsonRequest('POST', $settings['new_api_url'] . '/api/bot/registration-invite', [
         'Content-Type: application/json',
-        'X-QQ-Bot-Secret: ' . $settings['bot_secret'],
-    ], ['open_id' => $openID]);
+        'X-QQ-Bot-Timestamp: ' . $timestamp,
+        'X-QQ-Bot-Nonce: ' . $nonce,
+        'X-QQ-Bot-Signature: ' . $requestSignature,
+    ], $body);
     if ($response['status'] < 200 || $response['status'] >= 300) {
         throw new RuntimeException('invite service returned HTTP ' . $response['status']);
     }
@@ -330,6 +355,9 @@ function parseCommand(string $content): array
 /** @param array<string, mixed> $settings */
 function handleC2CMessage(array $settings, array $payload): bool
 {
+    if (($payload['t'] ?? '') !== 'C2C_MESSAGE_CREATE') {
+        return true;
+    }
     $data = $payload['d'] ?? null;
     if (!is_array($data) || !is_array($data['author'] ?? null)) {
         // Ignore malformed/non-user dispatches without asking QQ to retry
@@ -346,7 +374,7 @@ function handleC2CMessage(array $settings, array $payload): bool
     if (!$matched) {
         return true;
     }
-    $reply = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 - 领取注册邀请码（每个 QQ 账号一个）";
+    $reply = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 - 私聊领取注册邀请码（每个 QQ 账号一个）";
     if ($command === 'invite') {
         try {
             $code = claimInvite($settings, $openID);
@@ -438,4 +466,6 @@ function main(): void
     respondText('unsupported callback operation', 400);
 }
 
-main();
+if (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) === []) {
+    main();
+}

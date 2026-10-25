@@ -10,7 +10,7 @@ import (
 	"github.com/tencent-connect/botgo/event"
 )
 
-const helpMessage = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 - 领取注册邀请码（每个 QQ 账号一个）"
+const helpMessage = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 - 私聊领取注册邀请码（每个 QQ 账号一个）"
 
 type messageSender interface {
 	SendReply(ctx context.Context, openID, messageID, content string) error

@@ -36,8 +36,7 @@ import { AffiliateRewardsSection } from '../affiliate-rewards-section'
 type FixtureProps = {
   defaultValues?: {
     AffiliateRewardsEnabled: boolean
-    QuotaForInviter: number
-    QuotaForInvitee: number
+    AffiliateRewardPercent: number
   }
   complianceConfirmed?: boolean
 }
@@ -53,8 +52,7 @@ function Fixture(props: FixtureProps) {
           defaultValues={
             props.defaultValues ?? {
               AffiliateRewardsEnabled: false,
-              QuotaForInviter: 0,
-              QuotaForInvitee: 0,
+              AffiliateRewardPercent: 0,
             }
           }
           complianceConfirmed={props.complianceConfirmed ?? true}
@@ -83,22 +81,19 @@ beforeEach(() => {
   vi.spyOn(api, 'put').mockResolvedValue({ data: { success: true } })
 })
 
-test('enabling referral rewards saves the toggle and both existing quota settings', async () => {
+test('enabling referral rewards saves the toggle and recharge percentage', async () => {
   const user = userEvent.setup()
   renderSettings()
 
   await user.click(
     await screen.findByRole('switch', { name: 'Enable invitation rewards' })
   )
-  await user.clear(screen.getByRole('spinbutton', { name: 'Inviter Reward' }))
-  await user.type(
-    screen.getByRole('spinbutton', { name: 'Inviter Reward' }),
-    '2500'
+  await user.clear(
+    screen.getByRole('spinbutton', { name: 'Recharge reward percentage' })
   )
-  await user.clear(screen.getByRole('spinbutton', { name: 'Invitee Reward' }))
   await user.type(
-    screen.getByRole('spinbutton', { name: 'Invitee Reward' }),
-    '500'
+    screen.getByRole('spinbutton', { name: 'Recharge reward percentage' }),
+    '12.5'
   )
   await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -108,12 +103,8 @@ test('enabling referral rewards saves the toggle and both existing quota setting
       value: true,
     })
     expect(api.put).toHaveBeenCalledWith('/api/option/', {
-      key: 'QuotaForInviter',
-      value: 2500,
-    })
-    expect(api.put).toHaveBeenCalledWith('/api/option/', {
-      key: 'QuotaForInvitee',
-      value: 500,
+      key: 'AffiliateRewardPercent',
+      value: 12.5,
     })
   })
 })
@@ -122,8 +113,7 @@ test('shows the compliance notice for non-zero rewards when rewards are disabled
   renderSettings({
     defaultValues: {
       AffiliateRewardsEnabled: false,
-      QuotaForInviter: 100,
-      QuotaForInvitee: 0,
+      AffiliateRewardPercent: 10,
     },
     complianceConfirmed: false,
   })

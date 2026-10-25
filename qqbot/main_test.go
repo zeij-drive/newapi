@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -47,12 +48,11 @@ func TestReadConfigDefaultsAndValidation(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNewAPIInviteClientClaimsWithTheQQOpenIDAndSharedSecret(t *testing.T) {
+func TestNewAPIInviteClientClaimsWithSignedQQOpenIDRequest(t *testing.T) {
 	const sharedSecret = "test-bot-secret-with-at-least-32-characters"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		require.Equal(t, http.MethodPost, request.Method)
 		require.Equal(t, registrationInvitePath, request.URL.Path)
-		require.Equal(t, sharedSecret, request.Header.Get("X-QQ-Bot-Secret"))
 		var payload struct {
 			OpenID string `json:"open_id"`
 		}
@@ -60,6 +60,15 @@ func TestNewAPIInviteClientClaimsWithTheQQOpenIDAndSharedSecret(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(body, &payload))
 		require.Equal(t, "qq-open-id", payload.OpenID)
+		timestamp := request.Header.Get("X-QQ-Bot-Timestamp")
+		nonce := request.Header.Get("X-QQ-Bot-Nonce")
+		requestSignature := request.Header.Get("X-QQ-Bot-Signature")
+		require.NotEmpty(t, timestamp)
+		require.Len(t, nonce, 32)
+		_, err = hex.DecodeString(nonce)
+		require.NoError(t, err)
+		require.Equal(t, strings.ToLower(nonce), nonce)
+		require.Equal(t, signNewAPIInviteRequest(sharedSecret, http.MethodPost, registrationInvitePath, timestamp, nonce, body), requestSignature)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err = io.WriteString(writer, `{"success":true,"data":{"code":"SAPI-TEST-CODE"}}`)
 		require.NoError(t, err)
@@ -71,6 +80,18 @@ func TestNewAPIInviteClientClaimsWithTheQQOpenIDAndSharedSecret(t *testing.T) {
 	code, err := client.Claim(t.Context(), "qq-open-id")
 	require.NoError(t, err)
 	require.Equal(t, "SAPI-TEST-CODE", code)
+}
+
+func TestNewAPIInviteSignatureMatchesThePHPProtocolVector(t *testing.T) {
+	actual := signNewAPIInviteRequest(
+		"test-signature-secret",
+		http.MethodPost,
+		registrationInvitePath,
+		"1700000000",
+		"000102030405060708090a0b0c0d0e0f",
+		[]byte(`{"open_id":"qq-user"}`),
+	)
+	require.Equal(t, "377b32cc7e1f64e0843d4fff71fdce4f7a8256e4c2557be7e652c30e8c3b9a88", actual)
 }
 
 func TestNewAPIInviteClientRejectsInsecureRemoteURLs(t *testing.T) {
@@ -172,4 +193,25 @@ func TestNewWebhookHandlerDispatchesSignedC2CInviteCommand(t *testing.T) {
 	require.Equal(t, 1, claimer.calls)
 	require.Equal(t, "message-id", sender.messageID)
 	require.Contains(t, sender.content, "SAPI-WEBHOOK-CODE")
+}
+
+func TestNewWebhookHandlerDoesNotClaimInviteFromGroupMessage(t *testing.T) {
+	credentials := &token.QQBotCredentials{AppID: "bot-app", AppSecret: "bot-secret"}
+	sender := &testMessageSender{}
+	claimer := &testInviteClaimer{code: "SAPI-GROUP-CODE"}
+	event.RegisterHandlers(NewBot(sender, claimer).C2CMessageHandler())
+	handler := newWebhookHandler(credentials, "/qqbot")
+	body := `{"op":0,"s":1,"t":"GROUP_AT_MESSAGE_CREATE","id":"group-event-id","d":{"id":"group-message-id","content":"/sapi 邀请码","group_id":"group-id","author":{"id":"qq-open-id"}}}`
+	request := httptest.NewRequest(http.MethodPost, "/qqbot", strings.NewReader(body))
+	request.Header.Set(signature.HeaderTimestamp, strings.TrimSpace(time.Now().Format("20060102150405")))
+	signatureValue, err := signature.Generate(credentials.AppSecret, request.Header, []byte(body))
+	require.NoError(t, err)
+	request.Header.Set(signature.HeaderSig, signatureValue)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, 0, claimer.calls)
+	require.Empty(t, sender.content)
 }

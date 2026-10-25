@@ -27,15 +27,17 @@ STARRY_API_BOT_SECRET=与NewAPI完全相同的随机密钥
 
 ### 1.3 QQ 回调地址
 
-将 QQ 开放平台的 Webhook 地址设置为 `https://你的机器人域名/qqbot/`（如果上传到网站根目录则使用 `https://你的机器人域名/`），订阅 `C2C_MESSAGE_CREATE`。`.htaccess` 会把不存在的路径转发到 `index.php`；若主机不支持 Apache rewrite，可直接填写 `https://你的机器人域名/qqbot/index.php`。
+将 QQ 开放平台的 Webhook 地址设置为 `https://你的机器人域名/qqbot/`（如果上传到网站根目录则使用 `https://你的机器人域名/`），订阅 `C2C_MESSAGE_CREATE`。`/sapi 邀请码` 仅支持 C2C 私聊；群消息不会调用邀请码接口。`.htaccess` 会把不存在的路径转发到 `index.php`；若主机不支持 Apache rewrite，可直接填写 `https://你的机器人域名/qqbot/index.php`。
 
-`GET /healthz` 会返回 204，可用于面板健康检查；其他 GET 请求返回 405。QQ 的校验、心跳、签名验证、`/sapi` 帮助和 `/sapi 邀请码` 均由 `index.php` 完成。邀请码请求通过 `X-QQ-Bot-Secret` 调用 NewAPI `/api/bot/registration-invite`，每个 QQ OpenID 仍由 NewAPI 保证只能领取一个邀请码。
+`GET /healthz` 会返回 204，可用于面板健康检查；其他 GET 请求返回 405。QQ 的校验、心跳、签名验证、`/sapi` 帮助和 `/sapi 邀请码` 均由 `index.php` 完成。邀请码请求使用短时效 HMAC-SHA256 签名（时间戳、随机 nonce、请求体摘要）调用 NewAPI `/api/bot/registration-invite`，NewAPI 会原子拒绝重复 nonce；每个 QQ OpenID 仍由 NewAPI 保证只能领取一个邀请码。
 
 PHP 文件和示例配置位于 `qqbot/php/`：
 
 - `index.php`：Webhook 主入口；
 - `.htaccess`：Apache 路由和配置文件保护；
 - `config.php.example`：无法设置面板环境变量时的配置模板。
+
+若虚拟主机提供 PHP CLI，可在上传前运行协议回归测试：`php qqbot/tests/php_signature_test.php`。它只验证签名规范，不访问 NewAPI 或 QQ。
 
 ## 2. 配置 NewAPI
 
@@ -86,7 +88,7 @@ sudo systemctl status starryapi-qqbot
 sudo journalctl -u starryapi-qqbot -f
 ```
 
-服务使用独立的动态用户运行，并自动重启。使用 Nginx/Caddy 等反向代理，将公开 HTTPS 的 `/qqbot` 路径转发至 `127.0.0.1:9000/qqbot`；然后在 QQ Bot 开放平台将 HTTPS 回调地址设为 `https://你的机器人域名/qqbot`，并订阅 `C2C_MESSAGE_CREATE`。`GET /healthz` 可用于健康检查。
+服务使用独立的动态用户运行，并自动重启。使用 Nginx/Caddy 等反向代理，将公开 HTTPS 的 `/qqbot` 路径转发至 `127.0.0.1:9000/qqbot`；然后在 QQ Bot 开放平台将 HTTPS 回调地址设为 `https://你的机器人域名/qqbot`，并订阅 `C2C_MESSAGE_CREATE`。`/sapi 邀请码` 只在 C2C 私聊中生效，群聊事件不会生成邀请码。`GET /healthz` 可用于健康检查。
 
 反向代理和虚拟主机需允许 QQ 平台向 webhook 入站访问，并允许 QQ Bot 主机通过 HTTPS 访问 NewAPI。不要把未经 TLS 保护的 webhook 端口直接暴露到公网。
 
@@ -108,7 +110,7 @@ docker run -d --name starryapi-qqbot --restart unless-stopped \
 | `QQ_BOT_APP_ID` | 是 | QQ Bot 应用 ID。 |
 | `QQ_BOT_APP_SECRET` | 是 | QQ Bot 应用密钥，用于 QQ 平台鉴权和 webhook 签名验证。 |
 | `NEW_API_URL` | 是 | NewAPI 对外基础地址；远程地址必须使用 HTTPS，本地回环开发可用 HTTP。 |
-| `STARRY_API_BOT_SECRET` | 是 | NewAPI 与 QQ Bot 的共享接口密钥，至少 32 个字符，双方必须完全一致。 |
+| `STARRY_API_BOT_SECRET` | 是 | NewAPI 与 QQ Bot 的 HMAC 共享密钥，至少 32 个字符，双方必须完全一致；不要通过 URL 或普通日志传输。 |
 | `QQ_BOT_LISTEN_ADDR` | 否 | webhook 监听地址，默认 `:9000`；本机反代时建议 `127.0.0.1:9000`。 |
 | `QQ_BOT_WEBHOOK_PATH` | 否 | webhook 路径，默认 `/qqbot`。 |
 | `QQ_BOT_TLS_CERT_FILE` | 否 | webhook TLS 证书路径；与 TLS key 一起配置时 Bot 自行提供 HTTPS。 |
@@ -121,4 +123,10 @@ PHP 面板部署还支持以下可选变量：
 | `QQ_BOT_CONFIG_FILE` | PHP 配置文件的绝对路径；用于面板不能注入环境变量时指定站点根目录外的配置文件。 |
 | `QQ_BOT_TOKEN_CACHE_FILE` | PHP QQ access token 缓存文件路径；默认写入系统临时目录，文件权限为 0600。 |
 
-`STARRY_API_BOT_SECRET` 不等于 QQ App Secret；使用随机生成的专用值。Bot 会通过 `X-QQ-Bot-Secret` 请求 NewAPI `/api/bot/registration-invite`，NewAPI 以常量时间比较验证共享密钥。每个 QQ OpenID 只能领取一个邀请码。
+`STARRY_API_BOT_SECRET` 不等于 QQ App Secret；使用随机生成的专用值。Bot 请求 `/api/bot/registration-invite` 时发送以下请求头：
+
+- `X-QQ-Bot-Timestamp`：Unix 秒时间戳，服务端只接受前后 5 分钟；
+- `X-QQ-Bot-Nonce`：16 字节随机值的 32 位小写十六进制字符串，每个值只能使用一次；
+- `X-QQ-Bot-Signature`：HMAC-SHA256 十六进制值。
+
+签名原文为 `POST\n/api/bot/registration-invite\n时间戳\nnonce\n小写十六进制的SHA256(原始请求体)`，再用 `STARRY_API_BOT_SECRET` 计算 HMAC-SHA256。服务端使用常量时间比较签名，并优先用 Redis `SET NX` 做跨实例防重放；未启用 Redis 时使用有界进程内缓存（多实例部署应启用 Redis）。接口还保留 NewAPI 的关键接口限流；每个 QQ OpenID 只能领取一个邀请码。请保持系统时钟同步，并只通过 HTTPS 调用 NewAPI。

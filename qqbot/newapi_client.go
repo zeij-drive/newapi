@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,8 +48,8 @@ func newNewAPIInviteClient(baseURL, secret string) (*newAPIInviteClient, error) 
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())) {
 		return nil, errors.New("NewAPI base URL must use HTTPS, except for loopback development")
 	}
-	if secret == "" {
-		return nil, errors.New("NewAPI bot secret is required")
+	if len(secret) < 32 {
+		return nil, errors.New("NewAPI bot secret must be at least 32 characters")
 	}
 	return &newAPIInviteClient{
 		baseURL: baseURL,
@@ -68,12 +73,20 @@ func (client *newAPIInviteClient) Claim(ctx context.Context, openID string) (str
 	if err != nil {
 		return "", errors.New("could not create invite request")
 	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return "", errors.New("could not create invite request")
+	}
+	nonce := hex.EncodeToString(nonceBytes)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+registrationInvitePath, bytes.NewReader(payload))
 	if err != nil {
 		return "", errors.New("could not create invite request")
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-QQ-Bot-Secret", client.secret)
+	request.Header.Set("X-QQ-Bot-Timestamp", timestamp)
+	request.Header.Set("X-QQ-Bot-Nonce", nonce)
+	request.Header.Set("X-QQ-Bot-Signature", signNewAPIInviteRequest(client.secret, http.MethodPost, registrationInvitePath, timestamp, nonce, payload))
 	response, err := client.client.Do(request)
 	if err != nil {
 		return "", errors.New("invite service request failed")
@@ -95,4 +108,12 @@ func (client *newAPIInviteClient) Claim(ctx context.Context, openID string) (str
 		return "", errors.New("invite service did not issue an invite code")
 	}
 	return result.Data.Code, nil
+}
+
+func signNewAPIInviteRequest(secret, method, path, timestamp, nonce string, body []byte) string {
+	bodyDigest := sha256.Sum256(body)
+	canonical := strings.Join([]string{method, path, timestamp, nonce, hex.EncodeToString(bodyDigest[:])}, "\n")
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(canonical))
+	return hex.EncodeToString(mac.Sum(nil))
 }

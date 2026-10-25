@@ -34,7 +34,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { formatQuota } from '@/lib/format'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
@@ -51,18 +50,13 @@ import { useUpdateOption } from '../hooks/use-update-option'
 
 const affiliateRewardsSchema = z.object({
   AffiliateRewardsEnabled: z.boolean(),
-  QuotaForInviter: z.coerce.number().min(0),
-  QuotaForInvitee: z.coerce.number().min(0),
+  AffiliateRewardPercent: z.coerce.number().min(0).max(100),
 })
 
 type AffiliateRewardsFormValues = z.infer<typeof affiliateRewardsSchema>
 type AffiliateRewardsSettingsProps = {
   defaultValues: AffiliateRewardsFormValues
   complianceConfirmed: boolean
-}
-
-function formatQuotaInputValue(value: number | ''): string {
-  return formatQuota(value === '' ? 0 : value)
 }
 
 export function AffiliateRewardsSection(props: AffiliateRewardsSettingsProps) {
@@ -93,10 +87,9 @@ export function AffiliateRewardsSection(props: AffiliateRewardsSettingsProps) {
       },
     })
 
-  const inviterQuota = form.watch('QuotaForInviter')
-  const inviteeQuota = form.watch('QuotaForInvitee')
+  const rewardPercent = form.watch('AffiliateRewardPercent')
   const hasUnconfirmedReward =
-    !props.complianceConfirmed && (inviterQuota > 0 || inviteeQuota > 0)
+    !props.complianceConfirmed && rewardPercent > 0
 
   return (
     <SettingsSection title={t('Invitation rewards')}>
@@ -128,7 +121,7 @@ export function AffiliateRewardsSection(props: AffiliateRewardsSettingsProps) {
                     <FormLabel>{t('Enable invitation rewards')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Grant the configured inviter and invitee quotas after a successful registration.'
+                        'Reward the inviter when an invited user successfully recharges.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
@@ -145,14 +138,16 @@ export function AffiliateRewardsSection(props: AffiliateRewardsSettingsProps) {
 
             <FormField
               control={form.control}
-              name='QuotaForInviter'
+              name='AffiliateRewardPercent'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Inviter Reward')}</FormLabel>
+                  <FormLabel>{t('Recharge reward percentage')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
                       min={0}
+                      max={100}
+                      step='0.01'
                       value={field.value ?? ''}
                       onChange={handleNumberChange(field.onChange)}
                       name={field.name}
@@ -162,38 +157,9 @@ export function AffiliateRewardsSection(props: AffiliateRewardsSettingsProps) {
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Quota given to users who invite others ({{formattedQuota}})',
-                      {
-                        formattedQuota: formatQuotaInputValue(field.value),
-                      }
+                      'Percentage of each successful invited-user recharge credited to the inviter ({{percent}}%).',
+                      { percent: field.value ?? 0 }
                     )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='QuotaForInvitee'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Invitee Reward')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      value={field.value ?? ''}
-                      onChange={handleNumberChange(field.onChange)}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Quota given to invited users ({{formattedQuota}})', {
-                      formattedQuota: formatQuotaInputValue(field.value),
-                    })}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

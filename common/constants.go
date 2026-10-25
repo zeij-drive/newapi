@@ -129,6 +129,11 @@ var TelegramBotToken = ""
 var TelegramBotName = ""
 
 var QuotaForNewUser = 0
+
+// AffiliateRewardPercent is the percentage of a successful invitee top-up
+// credited to the inviter's affiliate balance. It is bounded to [0, 100] by
+// option validation before being applied to billing paths.
+var AffiliateRewardPercent = 0.0
 var QuotaForInviter = 0
 var QuotaForInvitee = 0
 var ChannelDisableThreshold = 5.0

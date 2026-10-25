@@ -92,3 +92,22 @@ func TestAffiliateRewardsEnabledOptionUpdatesRuntimeState(t *testing.T) {
 	assert.True(t, common.AffiliateRewardsEnabled)
 	assert.Equal(t, "true", common.OptionMap["AffiliateRewardsEnabled"])
 }
+
+func TestAffiliateRewardPercentOptionValidationAndRuntimeState(t *testing.T) {
+	originalPercent := common.AffiliateRewardPercent
+	originalMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() {
+		common.AffiliateRewardPercent = originalPercent
+		common.OptionMap = originalMap
+	})
+
+	for _, invalid := range []string{"-0.01", "100.01", "NaN", "Inf", "not-a-number"} {
+		assert.Error(t, validateOptionValue("AffiliateRewardPercent", invalid), "value %q", invalid)
+	}
+	assert.Error(t, validateOptionValue("AffiliateRewardPercent", ""))
+
+	require.NoError(t, updateOptionMap("AffiliateRewardPercent", "12.5"))
+	assert.Equal(t, 12.5, common.AffiliateRewardPercent)
+	assert.Equal(t, "12.5", common.OptionMap["AffiliateRewardPercent"])
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -351,6 +352,78 @@ func TestDisabledAffiliateRewardsDoNotAccrueOrTransferQuota(t *testing.T) {
 	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
 	assert.Equal(t, 300, storedInviter.AffQuota)
 	assert.Zero(t, storedInviter.Quota)
+}
+
+func TestAffiliateRegistrationOnlyTracksInviteCount(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	previousEnabled := common.AffiliateRewardsEnabled
+	previousInviterQuota := common.QuotaForInviter
+	previousInviteeQuota := common.QuotaForInvitee
+	previousNewUserQuota := common.QuotaForNewUser
+	previousPercent := common.AffiliateRewardPercent
+	paymentSetting := operation_setting.GetPaymentSetting()
+	previousComplianceConfirmed := paymentSetting.ComplianceConfirmed
+	previousComplianceTermsVersion := paymentSetting.ComplianceTermsVersion
+	common.AffiliateRewardsEnabled = true
+	common.QuotaForInviter = 1200
+	common.QuotaForInvitee = 800
+	common.QuotaForNewUser = 0
+	common.AffiliateRewardPercent = 20
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		common.AffiliateRewardsEnabled = previousEnabled
+		common.QuotaForInviter = previousInviterQuota
+		common.QuotaForInvitee = previousInviteeQuota
+		common.QuotaForNewUser = previousNewUserQuota
+		common.AffiliateRewardPercent = previousPercent
+		paymentSetting.ComplianceConfirmed = previousComplianceConfirmed
+		paymentSetting.ComplianceTermsVersion = previousComplianceTermsVersion
+	})
+
+	inviter := User{
+		Username:        "affiliate-registration-inviter",
+		Password:        "unused-password-hash",
+		Status:          common.UserStatusEnabled,
+		AffCode:         "affiliate-registration-inviter-code",
+		AffCount:        3,
+		AffQuota:        200,
+		AffHistoryQuota: 400,
+	}
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := User{
+		Username: "affiliate-registration-invitee",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, invitee.InsertWithInvite(inviter.Id, ""))
+
+	var storedInviter User
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Equal(t, 4, storedInviter.AffCount)
+	assert.Equal(t, 200, storedInviter.AffQuota)
+	assert.Equal(t, 400, storedInviter.AffHistoryQuota)
+	var storedInvitee User
+	require.NoError(t, DB.First(&storedInvitee, invitee.Id).Error)
+	assert.Zero(t, storedInvitee.Quota)
+	assert.Equal(t, inviter.Id, storedInvitee.InviterId)
+
+	oauthInvitee := User{
+		Username: "affiliate-registration-oauth-invitee",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return oauthInvitee.InsertWithTxAndInvite(tx, inviter.Id, "")
+	}))
+	oauthInvitee.FinalizeOAuthUserCreation(inviter.Id)
+	var storedOAuthInvitee User
+	require.NoError(t, DB.First(&storedOAuthInvitee, oauthInvitee.Id).Error)
+	assert.Zero(t, storedOAuthInvitee.Quota)
+	assert.Equal(t, inviter.Id, storedOAuthInvitee.InviterId)
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Equal(t, 5, storedInviter.AffCount)
+	assert.Equal(t, 200, storedInviter.AffQuota)
+	assert.Equal(t, 400, storedInviter.AffHistoryQuota)
 }
 
 func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
