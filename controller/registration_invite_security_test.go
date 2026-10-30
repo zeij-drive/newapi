@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +48,9 @@ func setupQQBotInviteControllerTest(t *testing.T) {
 	qqBotNonceCache.Lock()
 	qqBotNonceCache.values = make(map[string]time.Time)
 	qqBotNonceCache.Unlock()
+	qqBotInviteEmailCache.Lock()
+	qqBotInviteEmailCache.values = make(map[string]qqBotInviteEmailReservation)
+	qqBotInviteEmailCache.Unlock()
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.RedisEnabled = previousRedis
@@ -55,18 +59,27 @@ func setupQQBotInviteControllerTest(t *testing.T) {
 	})
 }
 
+func withQQBotInviteEmailSender(t *testing.T, sender func(recipient, code string) error) {
+	t.Helper()
+	previous := qqBotInviteEmailSender
+	qqBotInviteEmailSender = sender
+	t.Cleanup(func() { qqBotInviteEmailSender = previous })
+}
+
 func TestClaimRegistrationInviteForQQRequiresSignedFreshSingleUseRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupQQBotInviteControllerTest(t)
 	t.Setenv("STARRY_API_BOT_SECRET", testQQBotSecret)
 	now := strconv.FormatInt(time.Now().Unix(), 10)
-	body := `{"open_id":"qq-user-1"}`
+	body := `{"open_id":"qq-user-1","email":"user@example.com"}`
 	nonce := "0123456789abcdef0123456789abcdef"
+	withQQBotInviteEmailSender(t, func(string, string) error { return nil })
 
 	context, recorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, now, nonce, body)
 	ClaimRegistrationInviteForQQ(context)
 	require.Equal(t, http.StatusOK, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"code":"SAPI-`)
+	assert.Contains(t, recorder.Body.String(), `"sent":true`)
+	assert.NotContains(t, recorder.Body.String(), "SAPI-")
 
 	replayContext, replayRecorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, now, nonce, body)
 	ClaimRegistrationInviteForQQ(replayContext)
@@ -95,6 +108,101 @@ func TestClaimRegistrationInviteForQQRequiresSignedFreshSingleUseRequest(t *test
 	assert.Equal(t, http.StatusServiceUnavailable, unavailableRecorder.Code)
 }
 
+func TestClaimRegistrationInviteForQQRejectsInvalidEmailBeforeClaim(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupQQBotInviteControllerTest(t)
+	t.Setenv("STARRY_API_BOT_SECRET", testQQBotSecret)
+	withQQBotInviteEmailSender(t, func(string, string) error {
+		t.Fatal("invalid email must not trigger delivery")
+		return nil
+	})
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	body := `{"open_id":"qq-user-1","email":"not-an-email"}`
+	context, recorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, now, "6123456789abcdef0123456789abcdef", body)
+	ClaimRegistrationInviteForQQ(context)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "邮箱格式无效")
+
+	var count int64
+	require.NoError(t, model.DB.Model(&model.RegistrationInvite{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestClaimRegistrationInviteForQQUsesConfiguredEmailPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupQQBotInviteControllerTest(t)
+	t.Setenv("STARRY_API_BOT_SECRET", testQQBotSecret)
+	previousRestrictionEnabled, previousWhitelist := common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist
+	common.EmailDomainRestrictionEnabled = true
+	common.EmailDomainWhitelist = []string{"allowed.example"}
+	t.Cleanup(func() {
+		common.EmailDomainRestrictionEnabled = previousRestrictionEnabled
+		common.EmailDomainWhitelist = previousWhitelist
+	})
+	withQQBotInviteEmailSender(t, func(string, string) error {
+		t.Fatal("email outside the configured domain policy must not trigger delivery")
+		return nil
+	})
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	body := `{"open_id":"qq-user-1","email":"user@blocked.example"}`
+	context, recorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, now, "9123456789abcdef0123456789abcdef", body)
+	ClaimRegistrationInviteForQQ(context)
+	assert.Contains(t, recorder.Body.String(), "邮箱格式无效或不符合站点策略")
+
+	var count int64
+	require.NoError(t, model.DB.Model(&model.RegistrationInvite{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestClaimRegistrationInviteForQQEmailDeliveryRetryDoesNotDiscloseCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupQQBotInviteControllerTest(t)
+	t.Setenv("STARRY_API_BOT_SECRET", testQQBotSecret)
+	var deliveredCodes []string
+	withQQBotInviteEmailSender(t, func(_ string, code string) error {
+		deliveredCodes = append(deliveredCodes, code)
+		if len(deliveredCodes) == 1 {
+			return errors.New("SMTP unavailable")
+		}
+		return nil
+	})
+	body := `{"open_id":"qq-user-1","email":"user@example.com"}`
+	firstContext, firstRecorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, strconv.FormatInt(time.Now().Unix(), 10), "7123456789abcdef0123456789abcdef", body)
+	ClaimRegistrationInviteForQQ(firstContext)
+	assert.Contains(t, firstRecorder.Body.String(), "邀请码邮件发送失败")
+	assert.NotContains(t, firstRecorder.Body.String(), "SAPI-")
+
+	secondContext, secondRecorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, strconv.FormatInt(time.Now().Unix(), 10), "8123456789abcdef0123456789abcdef", body)
+	ClaimRegistrationInviteForQQ(secondContext)
+	assert.Contains(t, secondRecorder.Body.String(), `"sent":true`)
+	assert.NotContains(t, secondRecorder.Body.String(), "SAPI-")
+	require.Len(t, deliveredCodes, 2)
+	assert.Equal(t, deliveredCodes[0], deliveredCodes[1])
+}
+
+func TestClaimRegistrationInviteForQQLimitsRepeatEmailsPerQQOpenID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupQQBotInviteControllerTest(t)
+	t.Setenv("STARRY_API_BOT_SECRET", testQQBotSecret)
+	var deliveries int
+	withQQBotInviteEmailSender(t, func(string, string) error {
+		deliveries++
+		return nil
+	})
+	firstBody := `{"open_id":"qq-user-1","email":"first@example.com"}`
+	firstContext, firstRecorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, strconv.FormatInt(time.Now().Unix(), 10), "9123456789abcdef0123456789abcdef", firstBody)
+	ClaimRegistrationInviteForQQ(firstContext)
+	require.Equal(t, http.StatusOK, firstRecorder.Code)
+
+	secondBody := `{"open_id":"qq-user-1","email":"second@example.com"}`
+	secondContext, secondRecorder := makeSignedQQBotInviteRequest(t, testQQBotSecret, strconv.FormatInt(time.Now().Unix(), 10), "a123456789abcdef0123456789abcdef", secondBody)
+	ClaimRegistrationInviteForQQ(secondContext)
+	assert.Equal(t, http.StatusTooManyRequests, secondRecorder.Code)
+	assert.Equal(t, "60", secondRecorder.Header().Get("Retry-After"))
+	assert.NotContains(t, secondRecorder.Body.String(), "SAPI-")
+	assert.Equal(t, 1, deliveries)
+}
+
 func TestQQBotNonceReservationIsAtomicAndFailsClosedWithRedis(t *testing.T) {
 	previousRedis, previousRDB := common.RedisEnabled, common.RDB
 	redisServer := miniredis.RunT(t)
@@ -112,4 +220,23 @@ func TestQQBotNonceReservationIsAtomicAndFailsClosedWithRedis(t *testing.T) {
 
 	redisServer.Close()
 	assert.ErrorIs(t, reserveQQBotNonce("4123456789abcdef0123456789abcdef"), errQQBotReplayUnavailable)
+}
+
+func TestQQBotInviteEmailCooldownIsAtomicAndReleasableWithRedis(t *testing.T) {
+	previousRedis, previousRDB := common.RedisEnabled, common.RDB
+	redisServer := miniredis.RunT(t)
+	common.RDB = redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedis
+	})
+
+	key := qqBotInviteEmailRateLimitKey(testQQBotSecret, "qq-user-1")
+	require.NoError(t, reserveQQBotInviteEmailSend(testQQBotSecret, "qq-user-1", "nonce-1"))
+	assert.ErrorIs(t, reserveQQBotInviteEmailSend(testQQBotSecret, "qq-user-1", "nonce-2"), errQQBotInviteEmailRateLimited)
+	releaseQQBotInviteEmailSend(testQQBotSecret, "qq-user-1", "nonce-1")
+	require.NoError(t, reserveQQBotInviteEmailSend(testQQBotSecret, "qq-user-1", "nonce-3"))
+	assert.Greater(t, redisServer.TTL(key), time.Duration(0))
 }

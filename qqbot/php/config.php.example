@@ -9,4 +9,8 @@ return [
     'starry_api_bot_secret' => 'replace-with-a-random-secret-of-at-least-32-characters',
     // Optional; defaults to a 0600 file in the system temp directory.
     // 'qq_bot_token_cache_file' => '/home/USER/.cache/starryapi-qqbot-token.json',
+    // Required for /gptstatus images. Set this to the public HTTPS URL of this PHP directory.
+    'qq_bot_public_url' => 'https://bot.example.com/qqbot',
+    // Optional; stores the latest fetched status and image-signing token outside the public document root.
+    // 'gptstatus_state_file' => '/home/USER/.cache/starryapi-qqbot/state.json',
 ];

@@ -50,10 +50,11 @@ func run(ctx context.Context) error {
 	}
 	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(8 * time.Second).SetDebug(false)
 	bot := NewBot(qqC2CSender{api: api}, inviteClient)
-	event.RegisterHandlers(bot.C2CMessageHandler())
+	bot.ConfigureGPTStatus(os.Getenv("QQ_BOT_PUBLIC_URL"), settings.webhookPath, settings.apiSecret)
+	event.RegisterHandlers(bot.C2CMessageHandler(), bot.GroupATMessageHandler())
 	server := &http.Server{
 		Addr:              settings.listenAddr,
-		Handler:           newWebhookHandler(credentials, settings.webhookPath),
+		Handler:           newWebhookHandlerWithGPTStatus(credentials, settings.webhookPath, settings.apiSecret),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      12 * time.Second,
@@ -129,10 +130,36 @@ func readConfig(lookup func(string) (string, bool)) (config, error) {
 }
 
 func newWebhookHandler(credentials *token.QQBotCredentials, webhookPath string) http.Handler {
+	return newWebhookHandlerWithGPTStatus(credentials, webhookPath, "")
+}
+
+func newWebhookHandlerWithGPTStatus(credentials *token.QQBotCredentials, webhookPath, statusSecret string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
+	imagePath := strings.TrimRight(webhookPath, "/") + "/gptstatus/image"
+	if imagePath == "/gptstatus/image" {
+		imagePath = "/gptstatus/image"
+	}
+	if statusSecret != "" {
+		mux.HandleFunc("GET "+imagePath, func(writer http.ResponseWriter, request *http.Request) {
+			snapshot, err := decodeGPTStatusImageRequest(request, statusSecret)
+			if err != nil {
+				http.Error(writer, "invalid GPT status image", http.StatusNotFound)
+				return
+			}
+			imageData, err := renderGPTStatusPNG(snapshot)
+			if err != nil {
+				http.Error(writer, "could not render GPT status image", http.StatusInternalServerError)
+				return
+			}
+			writer.Header().Set("Content-Type", "image/png")
+			writer.Header().Set("Cache-Control", "private, max-age=60")
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write(imageData)
+		})
+	}
 	mux.HandleFunc("POST "+webhookPath, func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, maxWebhookBodyBytes))
 		if err != nil {
@@ -214,6 +241,44 @@ func (sender qqC2CSender) SendReply(ctx context.Context, openID, messageID, cont
 		Content:   content,
 		Timestamp: time.Now().UnixMilli(),
 		MsgID:     messageID,
+		MessageReference: &dto.MessageReference{
+			MessageID:             messageID,
+			IgnoreGetMessageError: true,
+		},
+	})
+	return err
+}
+
+func (sender qqC2CSender) SendGroupReply(ctx context.Context, groupID, messageID, content string) error {
+	_, err := sender.api.PostGroupMessage(ctx, groupID, dto.MessageToCreate{
+		Content:   content,
+		Timestamp: time.Now().UnixMilli(),
+		MsgID:     messageID,
+		MessageReference: &dto.MessageReference{
+			MessageID:             messageID,
+			IgnoreGetMessageError: true,
+		},
+	})
+	return err
+}
+
+func (sender qqC2CSender) SendGroupStatus(ctx context.Context, groupID, messageID, imageURL, caption string) error {
+	uploaded, err := sender.api.PostGroupMessage(ctx, groupID, dto.RichMediaMessage{
+		FileType: 1,
+		URL:      imageURL,
+	})
+	if err != nil {
+		return err
+	}
+	if len(uploaded.FileInfo) == 0 {
+		return errors.New("QQ group image upload returned no file information")
+	}
+	_, err = sender.api.PostGroupMessage(ctx, groupID, dto.MessageToCreate{
+		Content:   caption,
+		MsgType:   dto.RichMediaMsg,
+		Timestamp: time.Now().UnixMilli(),
+		MsgID:     messageID,
+		Media:     &dto.MediaInfo{FileInfo: uploaded.FileInfo},
 		MessageReference: &dto.MessageReference{
 			MessageID:             messageID,
 			IgnoreGetMessageError: true,

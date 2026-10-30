@@ -11,7 +11,10 @@ RUN go build -trimpath -ldflags='-s -w' -o /out/starryapi-qqbot .
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/starryapi-qqbot /usr/local/bin/starryapi-qqbot
-RUN chmod 0755 /usr/local/bin/starryapi-qqbot
+RUN chmod 0755 /usr/local/bin/starryapi-qqbot \
+    && mkdir -p /var/lib/starryapi-qqbot \
+    && chown -R 10001:10001 /var/lib/starryapi-qqbot
+WORKDIR /var/lib/starryapi-qqbot
 USER 10001:10001
 EXPOSE 9000
 ENTRYPOINT ["/usr/local/bin/starryapi-qqbot"]

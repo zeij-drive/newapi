@@ -21,6 +21,8 @@ import (
 
 const registrationInvitePath = "/api/bot/registration-invite"
 
+var errInviteEmailRateLimited = errors.New("invite email rate limited")
+
 type config struct {
 	appID       string
 	appSecret   string
@@ -54,7 +56,12 @@ func newNewAPIInviteClient(baseURL, secret string) (*newAPIInviteClient, error) 
 	return &newAPIInviteClient{
 		baseURL: baseURL,
 		secret:  secret,
-		client:  &http.Client{Timeout: 8 * time.Second},
+		client: &http.Client{
+			Timeout: 8 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
 }
 
@@ -66,22 +73,23 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (client *newAPIInviteClient) Claim(ctx context.Context, openID string) (string, error) {
+func (client *newAPIInviteClient) SendInvite(ctx context.Context, openID, email string) error {
 	payload, err := json.Marshal(struct {
 		OpenID string `json:"open_id"`
-	}{OpenID: openID})
+		Email  string `json:"email"`
+	}{OpenID: openID, Email: email})
 	if err != nil {
-		return "", errors.New("could not create invite request")
+		return errors.New("could not create invite request")
 	}
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	nonceBytes := make([]byte, 16)
 	if _, err := rand.Read(nonceBytes); err != nil {
-		return "", errors.New("could not create invite request")
+		return errors.New("could not create invite request")
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+registrationInvitePath, bytes.NewReader(payload))
 	if err != nil {
-		return "", errors.New("could not create invite request")
+		return errors.New("could not create invite request")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-QQ-Bot-Timestamp", timestamp)
@@ -89,25 +97,28 @@ func (client *newAPIInviteClient) Claim(ctx context.Context, openID string) (str
 	request.Header.Set("X-QQ-Bot-Signature", signNewAPIInviteRequest(client.secret, http.MethodPost, registrationInvitePath, timestamp, nonce, payload))
 	response, err := client.client.Do(request)
 	if err != nil {
-		return "", errors.New("invite service request failed")
+		return errors.New("invite service request failed")
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusTooManyRequests {
+		return errInviteEmailRateLimited
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("invite service returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("invite service returned HTTP %d", response.StatusCode)
 	}
 	var result struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Code string `json:"code"`
+			Sent bool `json:"sent"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result); err != nil {
-		return "", errors.New("invite service returned invalid data")
+		return errors.New("invite service returned invalid data")
 	}
-	if !result.Success || result.Data.Code == "" || len(result.Data.Code) > 128 {
-		return "", errors.New("invite service did not issue an invite code")
+	if !result.Success || !result.Data.Sent {
+		return errors.New("invite service did not send an invite email")
 	}
-	return result.Data.Code, nil
+	return nil
 }
 
 func signNewAPIInviteRequest(secret, method, path, timestamp, nonce string, body []byte) string {
