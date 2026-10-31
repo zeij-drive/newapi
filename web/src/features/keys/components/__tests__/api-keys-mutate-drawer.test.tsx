@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test } from 'vitest'
 
 const { createInstance } = await import('i18next')
@@ -232,6 +233,7 @@ describe('API keys mutate drawer Auto group integration', () => {
     expect(createdPayloads[0]?.name).toBe('batch')
     for (const payload of createdPayloads) {
       expect(payload.group).toBe('auto')
+      expect(payload.allowed_groups).toEqual([])
       expect(payload.auto_groups).toEqual([])
       expect(payload.cross_group_retry).toBe(true)
     }
@@ -276,5 +278,28 @@ describe('API keys mutate drawer Auto group integration', () => {
     fireEvent.click(findButton('Save changes', true))
     await waitFor(() => expect(createdPayloads).toHaveLength(1))
     expect(createdPayloads[0]?.auto_groups).toEqual(['vip'])
+  })
+
+  test('adds a selectable group to the API key and submits it as an additional group', async () => {
+    const createdPayloads: Array<Record<string, unknown>> = []
+    installApiFixtures(createdPayloads)
+    await renderCreateDrawer()
+
+    selectComboboxOption(getControlByLabel('Group'), 'Standard access')
+
+    const user = userEvent.setup()
+    const groupInput = screen.getByRole('combobox', {
+      name: 'Select additional groups',
+    })
+    await user.click(groupInput)
+    await user.click(screen.getByRole('option', { name: 'vip' }))
+    await user.keyboard('{Escape}')
+
+    changeInput(getControlByLabel('Name'), 'multi-group')
+    await user.click(findButton('Save changes', true))
+    await waitFor(() => expect(createdPayloads).toHaveLength(1))
+
+    expect(createdPayloads[0]?.group).toBe('default')
+    expect(createdPayloads[0]?.allowed_groups).toEqual(['vip'])
   })
 })

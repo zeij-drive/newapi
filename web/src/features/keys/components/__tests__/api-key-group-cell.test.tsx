@@ -33,6 +33,7 @@ await i18n.use(initReactI18next).init({
       translation: {
         Auto: 'Auto',
         'Cross-group': 'Cross-group',
+        '+{{count}} more': '+{{count}} more',
         Ratio: 'Ratio',
         'Automatically selects the best available group with circuit breaker mechanism':
           'Automatically selects the best available group with circuit breaker mechanism',
@@ -42,6 +43,7 @@ await i18n.use(initReactI18next).init({
 })
 
 function CellHarness(props: {
+  allowedGroups?: string[]
   group: string
   ratio?: number | string
   crossGroupRetry?: boolean
@@ -51,6 +53,7 @@ function CellHarness(props: {
     <I18nextProvider i18n={i18n}>
       <TooltipProvider>
         <ApiKeyGroupCell
+          allowedGroups={props.allowedGroups}
           group={props.group}
           ratio={props.ratio}
           crossGroupRetry={props.crossGroupRetry ?? false}
@@ -156,5 +159,17 @@ describe('API key group table cell', () => {
     expect(screen.getByText('vip')).toBeInTheDocument()
     expect(screen.queryByText('Auto')).not.toBeInTheDocument()
     expect(screen.queryByText('自动')).not.toBeInTheDocument()
+  })
+
+  test('shows the number of additional groups and exposes their names on focus', async () => {
+    render(<CellHarness group='default' allowedGroups={['vip', 'premium']} />)
+
+    expect(screen.getByText('+2 more')).toBeInTheDocument()
+    await userEvent.tab()
+    expect(
+      await screen.findByText('default · vip, premium', {
+        selector: '[data-slot="tooltip-content"]',
+      })
+    ).toBeVisible()
   })
 })

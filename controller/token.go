@@ -32,14 +32,30 @@ func (input *tokenAutoGroupsInput) UnmarshalJSON(data []byte) error {
 	return common.Unmarshal(data, &input.Groups)
 }
 
+type tokenAllowedGroupsInput struct {
+	Set    bool
+	Groups []string
+}
+
+func (input *tokenAllowedGroupsInput) UnmarshalJSON(data []byte) error {
+	input.Set = true
+	if strings.TrimSpace(string(data)) == "null" {
+		input.Groups = nil
+		return nil
+	}
+	return common.Unmarshal(data, &input.Groups)
+}
+
 type tokenRequest struct {
 	model.Token
-	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
+	AutoGroups    tokenAutoGroupsInput    `json:"auto_groups"`
+	AllowedGroups tokenAllowedGroupsInput `json:"allowed_groups"`
 }
 
 type tokenResponse struct {
 	*model.Token
-	AutoGroups []string `json:"auto_groups"`
+	AutoGroups    []string `json:"auto_groups"`
+	AllowedGroups []string `json:"allowed_groups"`
 }
 
 func maxTokenQuota() int {
@@ -66,7 +82,15 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	if len(autoGroups) == 0 {
 		autoGroups = nil
 	}
-	return &tokenResponse{Token: &maskedToken, AutoGroups: autoGroups}
+	allowedGroups, err := token.GetAllowedGroups()
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to parse allowed groups for token %d: %v", token.Id, err))
+		allowedGroups = nil
+	}
+	if len(allowedGroups) == 0 {
+		allowedGroups = nil
+	}
+	return &tokenResponse{Token: &maskedToken, AutoGroups: autoGroups, AllowedGroups: allowedGroups}
 }
 
 func buildMaskedTokenResponses(tokens []*model.Token) []*tokenResponse {
@@ -121,6 +145,48 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 	}
 
 	if err := token.SetAutoGroups(groups); err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	return true
+}
+
+func setTokenAllowedGroups(c *gin.Context, token *model.Token, groups []string) bool {
+	if len(groups) == 0 {
+		if err := token.SetAllowedGroups(nil); err != nil {
+			common.ApiError(c, err)
+			return false
+		}
+		return true
+	}
+	if token.Group == "auto" {
+		common.ApiErrorI18n(c, i18n.MsgTokenAllowedGroupsInvalid, map[string]any{"Group": "auto"})
+		return false
+	}
+
+	userGroup, err := getTokenRequestUserGroup(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	defaultGroup := token.Group
+	if defaultGroup == "" {
+		defaultGroup = userGroup
+	}
+	seen := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		if _, ok := seen[group]; ok || group == defaultGroup {
+			common.ApiErrorI18n(c, i18n.MsgTokenAllowedGroupsDuplicate, map[string]any{"Group": group})
+			return false
+		}
+		seen[group] = struct{}{}
+		if !service.IsUserSelectableGroup(userGroup, group) {
+			common.ApiErrorI18n(c, i18n.MsgTokenAllowedGroupsInvalid, map[string]any{"Group": group})
+			return false
+		}
+	}
+
+	if err := token.SetAllowedGroups(groups); err != nil {
 		common.ApiError(c, err)
 		return false
 	}
@@ -323,6 +389,9 @@ func AddToken(c *gin.Context) {
 		token.CrossGroupRetry = false
 		_ = token.SetAutoGroups(nil)
 	}
+	if request.AllowedGroups.Set && !setTokenAllowedGroups(c, &token, request.AllowedGroups.Groups) {
+		return
+	}
 	key, err := common.GenerateKey()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgTokenGenerateFailed)
@@ -342,6 +411,7 @@ func AddToken(c *gin.Context) {
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
 		Group:              token.Group,
+		AllowedGroups:      token.AllowedGroups,
 		CrossGroupRetry:    token.CrossGroupRetry,
 		AutoGroups:         token.AutoGroups,
 	}
@@ -442,10 +512,21 @@ func UpdateToken(c *gin.Context) {
 		if token.Group != "auto" {
 			cleanToken.CrossGroupRetry = false
 			_ = cleanToken.SetAutoGroups(nil)
+			if request.AllowedGroups.Set && !setTokenAllowedGroups(c, cleanToken, request.AllowedGroups.Groups) {
+				return
+			}
 		} else if request.AutoGroups.Set {
+			if request.AllowedGroups.Set && !setTokenAllowedGroups(c, cleanToken, request.AllowedGroups.Groups) {
+				return
+			}
 			if !setTokenAutoGroups(c, cleanToken, request.AutoGroups.Groups) {
 				return
 			}
+		} else if request.AllowedGroups.Set && !setTokenAllowedGroups(c, cleanToken, request.AllowedGroups.Groups) {
+			return
+		}
+		if token.Group == "auto" {
+			_ = cleanToken.SetAllowedGroups(nil)
 		}
 	}
 	err = cleanToken.Update()
@@ -471,6 +552,7 @@ func UpdateToken(c *gin.Context) {
 			{"allow_ips", (previous.AllowIps == nil) != (cleanToken.AllowIps == nil) ||
 				(previous.AllowIps != nil && cleanToken.AllowIps != nil && *previous.AllowIps != *cleanToken.AllowIps)},
 			{"group", previous.Group != cleanToken.Group},
+			{"allowed_groups", previous.AllowedGroups != cleanToken.AllowedGroups},
 			{"cross_group_retry", previous.CrossGroupRetry != cleanToken.CrossGroupRetry},
 			{"auto_groups", previous.AutoGroups != cleanToken.AutoGroups},
 		} {

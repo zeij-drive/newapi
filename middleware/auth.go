@@ -686,6 +686,31 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	if token.Group != "auto" && token.AllowedGroups != "" {
+		allowedGroups, err := token.GetAllowedGroups()
+		if err != nil {
+			common.SysError(fmt.Sprintf("failed to parse allowed groups for token %d: %v", token.Id, err))
+		} else if len(allowedGroups) > 0 {
+			allGroups := make([]string, 0, len(allowedGroups)+1)
+			seen := make(map[string]struct{}, len(allowedGroups)+1)
+			defaultGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+			if defaultGroup != "" && defaultGroup != "auto" {
+				seen[defaultGroup] = struct{}{}
+				allGroups = append(allGroups, defaultGroup)
+			}
+			for _, group := range allowedGroups {
+				if group == "" || group == "auto" {
+					continue
+				}
+				if _, ok := seen[group]; ok {
+					continue
+				}
+				seen[group] = struct{}{}
+				allGroups = append(allGroups, group)
+			}
+			common.SetContextKey(c, constant.ContextKeyTokenAllowedGroups, allGroups)
+		}
+	}
 	if token.AutoGroups != "" {
 		autoGroups, err := token.GetAutoGroups()
 		if err != nil {

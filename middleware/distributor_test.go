@@ -18,11 +18,97 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyRequestedGroupUsesOnlyGroupsAllowedByToken(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	originalUsableGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP","premium":"Premium"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"premium":1}`))
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	})
+
+	tests := []struct {
+		name          string
+		requested     string
+		usableGroups  string
+		wantGroup     string
+		wantForbidden bool
+	}{
+		{name: "selected additional group", requested: "vip", usableGroups: `{"default":"Default","vip":"VIP","premium":"Premium"}`, wantGroup: "vip"},
+		{name: "group outside token selection", requested: "premium", usableGroups: `{"default":"Default","vip":"VIP","premium":"Premium"}`, wantForbidden: true},
+		{name: "selected group later revoked", requested: "vip", usableGroups: `{"default":"Default"}`, wantForbidden: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(test.usableGroups))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyTokenAllowedGroups, []string{"default", "vip"})
+
+			err := applyRequestedGroup(c, test.requested, false)
+			if test.wantForbidden {
+				require.Error(t, err)
+				assert.Equal(t, http.StatusForbidden, recorder.Code)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, test.wantGroup, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+			assert.Equal(t, test.wantGroup, common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+		})
+	}
+}
+
+func TestGetModelRequestReadsGroupFromOpenAIRequestBody(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","group":"vip","messages":[]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	request, shouldSelectChannel, err := getModelRequest(c)
+	require.NoError(t, err)
+	assert.True(t, shouldSelectChannel)
+	assert.Equal(t, "gpt-test", request.Model)
+	assert.Equal(t, "vip", request.Group)
+}
+
+func TestGetModelRequestReadsGroupFromGeminiRequestBody(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.0-flash:generateContent", strings.NewReader(`{"contents":[],"group":"vip"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	request, shouldSelectChannel, err := getModelRequest(c)
+	require.NoError(t, err)
+	assert.True(t, shouldSelectChannel)
+	assert.Equal(t, "gemini-2.0-flash", request.Model)
+	assert.Equal(t, "vip", request.Group)
+}
+
+func TestGetModelRequestReadsGroupForResolvedTaskModel(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/tasks/submit", strings.NewReader(`{"prompt":"test","group":"vip"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("resolved_task_model", "plugin-video-model")
+
+	request, shouldSelectChannel, err := getModelRequest(c)
+	require.NoError(t, err)
+	assert.True(t, shouldSelectChannel)
+	assert.Equal(t, "plugin-video-model", request.Model)
+	assert.Equal(t, "vip", request.Group)
+}
 
 func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin}

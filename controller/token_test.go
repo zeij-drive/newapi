@@ -307,6 +307,34 @@ func getTokenAutoGroupsColumnType(t *testing.T, db *gorm.DB, dialect string) str
 	}
 }
 
+func getTokenAllowedGroupsColumnType(t *testing.T, db *gorm.DB, dialect string) string {
+	t.Helper()
+
+	switch dialect {
+	case "sqlite":
+		return getSQLiteColumnType(t, db, "tokens", "allowed_groups")
+	case "mysql":
+		var columnType string
+		if err := db.Raw(`SELECT DATA_TYPE FROM information_schema.columns
+			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+			"tokens", "allowed_groups").Scan(&columnType).Error; err != nil {
+			t.Fatalf("failed to inspect mysql token allowed_groups column: %v", err)
+		}
+		return strings.ToLower(columnType)
+	case "postgres":
+		var dataType string
+		if err := db.Raw(`SELECT data_type FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+			"tokens", "allowed_groups").Scan(&dataType).Error; err != nil {
+			t.Fatalf("failed to inspect postgres token allowed_groups column: %v", err)
+		}
+		return strings.ToLower(dataType)
+	default:
+		t.Fatalf("unsupported dialect %q", dialect)
+		return ""
+	}
+}
+
 func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect string, managedTokensTable *bool) {
 	t.Helper()
 
@@ -351,8 +379,14 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 	if !db.Migrator().HasColumn(&model.Token{}, "auto_groups") {
 		t.Fatal("expected migration to add auto_groups column")
 	}
+	if !db.Migrator().HasColumn(&model.Token{}, "allowed_groups") {
+		t.Fatal("expected migration to add allowed_groups column")
+	}
 	if got := getTokenAutoGroupsColumnType(t, db, dialect); got != "text" {
 		t.Fatalf("expected migrated auto_groups column type text, got %q", got)
+	}
+	if got := getTokenAllowedGroupsColumnType(t, db, dialect); got != "text" {
+		t.Fatalf("expected migrated allowed_groups column type text, got %q", got)
 	}
 
 	var migratedToken model.Token
@@ -384,6 +418,7 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 		AllowIps:           common.GetPointer(""),
 		UsedQuota:          0,
 		Group:              "default",
+		AllowedGroups:      `["vip"]`,
 		CrossGroupRetry:    false,
 	}
 	if err := db.Create(&inserted).Error; err != nil {
@@ -397,6 +432,18 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 	if fetched.Key != longKey {
 		t.Fatalf("expected long token key %q, got %q", longKey, fetched.Key)
 	}
+	if fetched.AllowedGroups != `["vip"]` {
+		t.Fatalf("expected allowed groups to survive migration, got %q", fetched.AllowedGroups)
+	}
+
+	migrateTokenControllerTestDB(t, db)
+	var migratedAgain model.Token
+	if err := db.First(&migratedAgain, "id = ?", inserted.Id).Error; err != nil {
+		t.Fatalf("failed to fetch token after repeated migration: %v", err)
+	}
+	if migratedAgain.AllowedGroups != `["vip"]` {
+		t.Fatalf("expected allowed groups to survive repeated migration, got %q", migratedAgain.AllowedGroups)
+	}
 }
 
 func TestTokenAutoMigrateUsesVarchar128KeyColumn(t *testing.T) {
@@ -408,6 +455,10 @@ func TestTokenAutoMigrateUsesVarchar128KeyColumn(t *testing.T) {
 	if got := getSQLiteColumnType(t, db, "tokens", "auto_groups"); got != "text" {
 		t.Fatalf("expected auto_groups column type text, got %q", got)
 	}
+	if got := getSQLiteColumnType(t, db, "tokens", "allowed_groups"); got != "text" {
+		t.Fatalf("expected allowed_groups column type text, got %q", got)
+	}
+	migrateTokenControllerTestDB(t, db)
 }
 
 func TestTokenMigrationFromChar48ToVarchar128(t *testing.T) {

@@ -46,3 +46,29 @@ func TestSetupContextForTokenMalformedAutoGroupsFailsClosed(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []string{}, value)
 }
+
+func TestSetupContextForTokenIncludesDefaultAndAdditionalGroups(t *testing.T) {
+	ctx := newTokenAutoGroupsContext()
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+	token := &model.Token{
+		Id:            1,
+		UserId:        2,
+		Group:         "default",
+		AllowedGroups: `["vip","default"]`,
+	}
+
+	require.NoError(t, SetupContextForToken(ctx, token))
+	value, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAllowedGroups)
+	require.True(t, ok)
+	assert.Equal(t, []string{"default", "vip"}, value)
+}
+
+func TestSetupContextForTokenMalformedAllowedGroupsFailsClosed(t *testing.T) {
+	ctx := newTokenAutoGroupsContext()
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+	token := &model.Token{Id: 1, UserId: 2, Group: "default", AllowedGroups: `not-json`}
+
+	require.NoError(t, SetupContextForToken(ctx, token))
+	_, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAllowedGroups)
+	assert.False(t, ok)
+}

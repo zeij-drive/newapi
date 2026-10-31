@@ -157,6 +157,7 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
           return (
             <ApiKeyGroupCell
               group={group}
+              allowedGroups={apiKey.allowed_groups ?? []}
               ratio={groupRatios[group]}
               crossGroupRetry={apiKey.cross_group_retry}
               shouldReduceMotion={shouldReduceMotion}

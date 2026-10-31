@@ -12,9 +12,8 @@ import (
 	"github.com/tencent-connect/botgo/event"
 )
 
-const helpMessage = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮箱获取注册邀请码（每个 QQ 账号一个）\n/gptstatus - 群聊查询 GPT 状态图片"
+const helpMessage = "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 私聊或群聊@机器人获取邀请码（每个 QQ 账号一个，邮件发送）\n/gptstatus - 群聊查询 GPT 状态图片"
 const inviteUsageMessage = "用法：/sapi 邀请码 邮箱"
-const groupInviteMessage = "邀请码仅支持私聊，请私聊机器人发送：/sapi 邀请码 邮箱。"
 const inviteSentMessage = "邀请码已发送至邮箱，请查收。"
 const inviteSendFailedMessage = "邀请码邮件发送失败，请检查邮箱或稍后重试。"
 const inviteRateLimitedMessage = "请求过于频繁，请 1 分钟后重试。"
@@ -95,21 +94,7 @@ func (bot *Bot) C2CMessageHandler() event.C2CMessageEventHandler {
 		content := helpMessage
 		switch command {
 		case "invite":
-			fields := strings.Fields(message.Content)
-			if len(fields) != 3 || !validInviteEmail(fields[2]) {
-				content = inviteUsageMessage
-				break
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := bot.inviteSender.SendInvite(ctx, message.Author.ID, fields[2])
-			cancel()
-			if errors.Is(err, errInviteEmailRateLimited) {
-				content = inviteRateLimitedMessage
-			} else if err != nil {
-				content = inviteSendFailedMessage
-			} else {
-				content = inviteSentMessage
-			}
+			content = bot.inviteEmailReply(message.Author.ID, message.Content)
 		case "invite_usage":
 			content = inviteUsageMessage
 		case "invalid":
@@ -122,9 +107,8 @@ func (bot *Bot) C2CMessageHandler() event.C2CMessageEventHandler {
 	}
 }
 
-// GroupATMessageHandler handles commands sent by @mentioning the bot in a
-// group. Invite codes deliberately remain private-chat only; group requests
-// receive an explanatory reply and never call the invite service.
+// GroupATMessageHandler handles commands sent by @mentioning the bot in a group.
+// Invite codes are delivered by email and are never included in group replies.
 func (bot *Bot) GroupATMessageHandler() event.GroupATMessageEventHandler {
 	return func(payload *dto.WSPayload, message *dto.WSGroupATMessageData) error {
 		if message == nil || message.Author == nil {
@@ -165,8 +149,14 @@ func (bot *Bot) GroupATMessageHandler() event.GroupATMessageEventHandler {
 		}
 		content := helpMessage
 		switch command {
-		case "invite", "invite_usage":
-			content = groupInviteMessage
+		case "invite":
+			commandContent, _ := stripGroupMention(message.Content)
+			if message.Author.ID == "" {
+				return errors.New("QQ group message is missing its user identifier")
+			}
+			content = bot.inviteEmailReply(message.Author.ID, commandContent)
+		case "invite_usage":
+			content = inviteUsageMessage
 		case "invalid":
 			content = commandNotFoundMessage
 		}
@@ -175,6 +165,22 @@ func (bot *Bot) GroupATMessageHandler() event.GroupATMessageEventHandler {
 		defer cancel()
 		return sender.SendGroupReply(ctx, groupID, message.ID, content)
 	}
+}
+
+func (bot *Bot) inviteEmailReply(openID, commandContent string) string {
+	fields := strings.Fields(commandContent)
+	if len(fields) != 3 || !validInviteEmail(fields[2]) {
+		return inviteUsageMessage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := bot.inviteSender.SendInvite(ctx, openID, fields[2]); err != nil {
+		if errors.Is(err, errInviteEmailRateLimited) {
+			return inviteRateLimitedMessage
+		}
+		return inviteSendFailedMessage
+	}
+	return inviteSentMessage
 }
 
 func (bot *Bot) handleGPTStatusCommand(groupID, messageID string, command gptStatusCommand) error {

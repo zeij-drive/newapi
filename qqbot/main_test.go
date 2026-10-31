@@ -218,7 +218,7 @@ func TestNewWebhookHandlerDispatchesSignedC2CInviteEmailCommand(t *testing.T) {
 	require.NotContains(t, sender.content, "SAPI-")
 }
 
-func TestNewWebhookHandlerDoesNotClaimInviteFromGroupMessage(t *testing.T) {
+func TestNewWebhookHandlerDispatchesGroupInviteEmailCommand(t *testing.T) {
 	credentials := &token.QQBotCredentials{AppID: "bot-app", AppSecret: "bot-secret"}
 	sender := &testMessageSender{}
 	inviteSender := &testInviteEmailSender{}
@@ -236,7 +236,11 @@ func TestNewWebhookHandlerDoesNotClaimInviteFromGroupMessage(t *testing.T) {
 	handler.ServeHTTP(response, request)
 
 	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, 0, inviteSender.calls)
+	require.Equal(t, 1, inviteSender.calls)
+	require.Equal(t, "qq-open-id", inviteSender.openID)
+	require.Equal(t, "person@example.com", inviteSender.email)
 	require.Equal(t, "group-id", sender.groupID)
-	require.Equal(t, groupInviteMessage, sender.content)
+	require.Equal(t, inviteSentMessage, sender.content)
+	require.NotContains(t, sender.content, "person@example.com")
+	require.NotContains(t, sender.content, "SAPI-")
 }

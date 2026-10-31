@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils'
 import { GroupRatioBadge, type GroupRatio } from './auto-group-visuals'
 
 type ApiKeyGroupCellProps = {
+  allowedGroups?: string[]
   crossGroupRetry: boolean
   group: string
   ratio?: GroupRatio
@@ -43,6 +44,13 @@ export function ApiKeyGroupCell(props: ApiKeyGroupCellProps) {
   const isMobile = useMediaQuery('(max-width: 640px)')
 
   const group = props.group?.trim() || ''
+  const allowedGroups = (props.allowedGroups ?? []).filter(
+    (allowedGroup) => allowedGroup && allowedGroup !== group
+  )
+  const groupLabel = group || t('Follow user group')
+  const tooltipContent = allowedGroups.length
+    ? `${groupLabel} · ${allowedGroups.join(', ')}`
+    : groupLabel
   if (group !== 'auto') {
     const ratio =
       group && typeof props.ratio === 'number' ? props.ratio : undefined
@@ -50,7 +58,7 @@ export function ApiKeyGroupCell(props: ApiKeyGroupCellProps) {
       <TruncatedCell
         className={isMobile ? 'w-full' : 'max-w-50'}
         tabIndex={0}
-        tooltipContent={group || t('Follow user group')}
+        tooltipContent={tooltipContent}
         tooltipClassName='break-all'
       >
         <GroupBadge
@@ -60,6 +68,11 @@ export function ApiKeyGroupCell(props: ApiKeyGroupCellProps) {
           className='px-0'
           containerClassName={cn('gap-3', isMobile && 'w-full justify-between')}
         />
+        {allowedGroups.length > 0 && (
+          <span className='text-muted-foreground shrink-0 text-xs'>
+            {t('+{{count}} more', { count: allowedGroups.length })}
+          </span>
+        )}
       </TruncatedCell>
     )
   }

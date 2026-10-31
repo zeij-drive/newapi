@@ -41,6 +41,7 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       model_limits: z.array(z.string()),
       allow_ips: z.string().optional(),
       group: z.string().optional(),
+      allowed_groups: z.array(z.string()),
       auto_groups_mode: z.enum(['inherit', 'custom']),
       auto_groups: z.array(z.string()),
       cross_group_retry: z.boolean().optional(),
@@ -111,6 +112,7 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   model_limits: [],
   allow_ips: '',
   group: DEFAULT_GROUP,
+  allowed_groups: [],
   auto_groups_mode: 'inherit',
   auto_groups: [],
   cross_group_retry: true,
@@ -123,6 +125,7 @@ export function getApiKeyFormDefaultValues(
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
     group: defaultUseAutoGroup ? 'auto' : DEFAULT_GROUP,
+    allowed_groups: [],
     auto_groups_mode: 'inherit',
     auto_groups: [],
     cross_group_retry: defaultUseAutoGroup,
@@ -152,6 +155,7 @@ export function transformFormDataToPayload(
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
     group: data.group || '',
+    allowed_groups: data.group === 'auto' ? [] : data.allowed_groups,
     auto_groups:
       data.group === 'auto' && data.auto_groups_mode === 'custom'
         ? data.auto_groups
@@ -174,6 +178,16 @@ export function transformApiKeyToFormDefaults(
     .filter((group) => availableSet.has(group))
     .slice(0, Math.max(0, maxAutoGroups))
   const autoGroupsMode = storedAutoGroups.length > 0 ? 'custom' : 'inherit'
+  const defaultGroup = apiKey.group || DEFAULT_GROUP
+  const allowedGroups =
+    defaultGroup === 'auto'
+      ? []
+      : (apiKey.allowed_groups ?? []).filter(
+          (group) =>
+            availableSet.has(group) &&
+            group !== defaultGroup &&
+            group !== 'auto'
+        )
 
   return {
     name: apiKey.name,
@@ -189,7 +203,8 @@ export function transformApiKeyToFormDefaults(
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],
     allow_ips: apiKey.allow_ips || '',
-    group: apiKey.group || DEFAULT_GROUP,
+    group: defaultGroup,
+    allowed_groups: allowedGroups,
     auto_groups_mode: autoGroupsMode,
     auto_groups: autoGroups,
     cross_group_retry: !!apiKey.cross_group_retry,

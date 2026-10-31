@@ -8,24 +8,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTokenAutoGroupsRoundTripThroughRedisHashCache(t *testing.T) {
+func TestTokenGroupSettingsRoundTripThroughRedisHashCache(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	token := Token{
-		Id:         42,
-		UserId:     7,
-		Key:        "token-auto-groups-cache-key",
-		Name:       "auto-cache",
-		Group:      "auto",
-		AutoGroups: `["vip","default"]`,
+		Id:            42,
+		UserId:        7,
+		Key:           "token-auto-groups-cache-key",
+		Name:          "auto-cache",
+		Group:         "auto",
+		AutoGroups:    `["vip","default"]`,
+		AllowedGroups: `["priority"]`,
 	}
 
 	require.NoError(t, cacheSetTokenForTest(token))
 	cached, err := cacheGetTokenByKey(token.Key)
 	require.NoError(t, err)
 	assert.Equal(t, token.AutoGroups, cached.AutoGroups)
+	assert.Equal(t, token.AllowedGroups, cached.AllowedGroups)
 	groups, err := cached.GetAutoGroups()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"vip", "default"}, groups)
+	allowedGroups, err := cached.GetAllowedGroups()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"priority"}, allowedGroups)
+}
+
+func TestTokenCacheRefreshPreservesExistingHash(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	token := Token{
+		Id:        42,
+		UserId:    7,
+		Key:       "token-cache-refresh-key",
+		Name:      "cache-refresh",
+		UsedQuota: 0,
+	}
+
+	require.NoError(t, cacheSetTokenForTest(token))
+	result, err := cacheInitToken(token)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result, "existing hashes should only have their TTL refreshed")
+
+	_, err = cacheGetTokenByKey(token.Key)
+	require.NoError(t, err, "refreshing the TTL must not delete the cached token")
 }
 
 func TestTokenUpdateSynchronouslyNarrowsPreheatedAutoGroupsCache(t *testing.T) {

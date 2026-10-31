@@ -46,6 +46,7 @@ const baseApiKey: ApiKey = {
   created_time: 1,
   accessed_time: 0,
   group: 'auto',
+  allowed_groups: null,
   auto_groups: null,
   cross_group_retry: true,
   model_limits_enabled: false,
@@ -68,6 +69,32 @@ describe('API key Auto group form mapping', () => {
     expect(defaults.auto_groups_mode).toBe('inherit')
     expect(defaults.auto_groups).toEqual([])
     expect(transformFormDataToPayload(defaults).auto_groups).toEqual([])
+    expect(transformFormDataToPayload(defaults).allowed_groups).toEqual([])
+  })
+
+  test('keeps only currently available additional groups and sends them with the default group', () => {
+    const defaults = transformApiKeyToFormDefaults(
+      {
+        ...baseApiKey,
+        group: 'default',
+        allowed_groups: ['vip', 'revoked', 'default', 'auto'],
+      },
+      ['default', 'vip'],
+      2
+    )
+
+    expect(defaults.allowed_groups).toEqual(['vip'])
+    expect(transformFormDataToPayload(defaults).allowed_groups).toEqual(['vip'])
+  })
+
+  test('drops additional groups from Auto routing', () => {
+    const defaults = transformApiKeyToFormDefaults(
+      { ...baseApiKey, group: 'auto', allowed_groups: ['vip'] },
+      ['default', 'vip'],
+      2
+    )
+
+    expect(defaults.allowed_groups).toEqual([])
   })
 
   test('maps omitted, null, and empty snapshots to inheritance on edit', () => {

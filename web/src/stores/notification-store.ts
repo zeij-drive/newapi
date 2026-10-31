@@ -26,11 +26,13 @@ interface NotificationState {
   readAnnouncementKeys: string[]
   // Timestamp of last "Close Today" action
   closedUntilDate: string | null
+  dismissedAnnouncement: { fingerprint: string; date: string } | null
 
   // Actions
   markNoticeRead: (noticeContent: string) => void
   markAnnouncementsRead: (keys: string[]) => void
   setClosedUntilDate: (date: string | null) => void
+  dismissAnnouncement: (fingerprint: string, date: string) => void
   isAnnouncementRead: (key: string) => boolean
   isNoticeClosed: () => boolean
 }
@@ -45,6 +47,7 @@ export const useNotificationStore = create<NotificationState>()(
       lastReadNotice: '',
       readAnnouncementKeys: [],
       closedUntilDate: null,
+      dismissedAnnouncement: null,
 
       markNoticeRead: (noticeContent: string) => {
         // Persist the full trimmed content so edits beyond 100 chars register
@@ -62,6 +65,10 @@ export const useNotificationStore = create<NotificationState>()(
 
       setClosedUntilDate: (date: string | null) => {
         set({ closedUntilDate: date })
+      },
+
+      dismissAnnouncement: (fingerprint: string, date: string) => {
+        set({ dismissedAnnouncement: { fingerprint, date } })
       },
 
       isAnnouncementRead: (key: string) => {
@@ -82,6 +89,7 @@ export const useNotificationStore = create<NotificationState>()(
         lastReadNotice: state.lastReadNotice,
         readAnnouncementKeys: state.readAnnouncementKeys,
         closedUntilDate: state.closedUntilDate,
+        dismissedAnnouncement: state.dismissedAnnouncement,
       }),
     }
   )

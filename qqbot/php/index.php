@@ -772,15 +772,20 @@ function isValidInviteEmail(string $email): bool
 /** @return array{0:string,1:bool} */
 function parseGroupCommand(string $content): array
 {
+    return parseCommand(stripQQGroupMentions($content));
+}
+
+function stripQQGroupMentions(string $content): string
+{
     $content = trim($content);
     while (substr($content, 0, 2) === '<@') {
         $separator = strpos($content, '>');
         if ($separator === false) {
-            return ['', false];
+            return '';
         }
         $content = trim(substr($content, $separator + 1));
     }
-    return parseCommand($content);
+    return $content;
 }
 
 function groupCommandReply(string $content): ?string
@@ -792,10 +797,29 @@ function groupCommandReply(string $content): ?string
     if ($command === 'unknown') {
         return '指令不存在';
     }
-    if ($command === 'invite' || $command === 'invite_usage') {
-        return '邀请码仅支持私聊，请私聊机器人发送 /sapi 邀请码 邮箱。';
+    if ($command === 'invite_usage') {
+        return '用法：/sapi 邀请码 邮箱';
     }
-    return "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮箱接收注册邀请码（每个 QQ 账号一个）\n/gptstatus - 群聊查询 GPT 状态图片";
+    return "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮件获取注册邀请码（每个 QQ 账号一个）\n/gptstatus - 群聊查询 GPT 状态图片";
+}
+
+/** @param array<string, mixed> $settings */
+function inviteEmailCommandReply(array $settings, string $openID, string $content): string
+{
+    $fields = preg_split('/\\s+/u', trim($content), -1, PREG_SPLIT_NO_EMPTY);
+    $email = is_array($fields) && isset($fields[2]) ? (string) $fields[2] : '';
+    if (!is_array($fields) || count($fields) !== 3 || !isValidInviteEmail($email)) {
+        return '邮箱格式不正确，请使用：/sapi 邀请码 邮箱';
+    }
+    try {
+        claimInvite($settings, $openID, $email);
+        return '邀请码邮件已发送，请查收。';
+    } catch (Throwable $error) {
+        error_log('StarryAPI QQ bot invite email delivery failed: ' . $error->getMessage());
+        return $error->getMessage() === 'invite email rate limited'
+            ? '请求过于频繁，请 1 分钟后重试。'
+            : '邀请码邮件发送失败，请检查邮箱或稍后重试。';
+    }
 }
 
 /** @return array{command:?string,matched:bool} */
@@ -917,7 +941,7 @@ function handleC2CMessage(array $settings, array $payload): bool
         ? '指令不存在'
         : ('invite_usage' === $command
             ? '用法：/sapi 邀请码 邮箱'
-            : "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮箱接收注册邀请码（每个 QQ 账号一个）\n/gptstatus - 群聊查询 GPT 状态图片");
+            : "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 私聊或群聊@机器人获取邀请码（每个 QQ 账号一个，邮件发送）\n/gptstatus - 群聊查询 GPT 状态图片");
     if ($command === 'invite') {
         $fields = preg_split('/\s+/u', trim($content), -1, PREG_SPLIT_NO_EMPTY);
         $email = is_array($fields) && isset($fields[2]) ? (string) $fields[2] : '';
@@ -956,8 +980,9 @@ function handleGroupMessage(array $settings, array $payload): bool
     }
     $messageID = (string) ($data['id'] ?? '');
     $groupID = (string) ($data['group_openid'] ?? $data['group_id'] ?? '');
+    $openID = (string) ($data['author']['id'] ?? $data['author']['user_openid'] ?? '');
     $content = (string) ($data['content'] ?? '');
-    if ($messageID === '' || $groupID === '') {
+    if ($messageID === '' || $groupID === '' || $openID === '') {
         return true;
     }
     $gptStatusCommand = parseGroupGPTStatusCommand($content);
@@ -974,6 +999,19 @@ function handleGroupMessage(array $settings, array $payload): bool
                 return false;
             }
         }
+    }
+    [$command, $matched] = parseGroupCommand($content);
+    if ($matched && ($command === 'invite' || $command === 'invite_usage')) {
+        $reply = $command === 'invite'
+            ? inviteEmailCommandReply($settings, $openID, stripQQGroupMentions($content))
+            : '用法：/sapi 邀请码 邮箱';
+        try {
+            sendQQGroupReply($settings, $groupID, $messageID, $reply);
+        } catch (Throwable $error) {
+            error_log('StarryAPI QQ bot group message send failed: ' . $error->getMessage());
+            return false;
+        }
+        return true;
     }
     $reply = groupCommandReply($content);
     if ($reply === null) {

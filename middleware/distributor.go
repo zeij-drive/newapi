@@ -17,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -50,6 +49,12 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		_, hasTokenGroupSelection := common.GetContextKey(c, constant.ContextKeyTokenAllowedGroups)
+		if hasTokenGroupSelection && shouldSelectChannel && modelRequest.Group != "" {
+			if err = applyRequestedGroup(c, modelRequest.Group, false); err != nil {
+				return
+			}
+		}
 		_, pinned, _ := constraints.ResolvedPin()
 		if !pinned {
 			// Select a channel for the user
@@ -79,20 +84,9 @@ func Distribute() func(c *gin.Context) {
 					return
 				}
 				// check path is /pg/chat/completions
-				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-					usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-					playgroundRequest := &dto.PlayGroundRequest{}
-					err = common.UnmarshalBodyReusable(c, playgroundRequest)
-					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
+				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") && !hasTokenGroupSelection {
+					if err = applyRequestedGroup(c, modelRequest.Group, true); err != nil {
 						return
-					}
-					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
-							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
-							return
-						}
-						common.SetContextKey(c, constant.ContextKeyUsingGroup, playgroundRequest.Group)
 					}
 				}
 			}
@@ -137,6 +131,34 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func applyRequestedGroup(c *gin.Context, requestedGroup string, playground bool) error {
+	if requestedGroup == "" {
+		return nil
+	}
+	if value, ok := common.GetContextKey(c, constant.ContextKeyTokenAllowedGroups); ok {
+		allowedGroups, valid := value.([]string)
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		if !valid || !slices.Contains(allowedGroups, requestedGroup) || !service.IsUserSelectableGroup(userGroup, requestedGroup) {
+			abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+			return errors.New("requested group is not allowed by the API key")
+		}
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, requestedGroup)
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, requestedGroup)
+		return nil
+	}
+	if !playground {
+		return nil
+	}
+	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	if !service.GroupInUserUsableGroups(usingGroup, requestedGroup) && requestedGroup != usingGroup {
+		abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+		return errors.New("requested group is not available to the user")
+	}
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, requestedGroup)
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, requestedGroup)
+	return nil
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.
@@ -275,6 +297,9 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	if countTopLevelJSONKey(requestBody, "model") > 1 {
 		return nil, errors.New("model must be provided once")
 	}
+	if countTopLevelJSONKey(requestBody, "group") > 1 {
+		return nil, errors.New("group must be provided once")
+	}
 
 	values := gjson.GetManyBytes(requestBody, "model", "group")
 	model, err := getJSONStringValue(values[0], "model")
@@ -371,6 +396,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	var err error
 	if modelName := c.GetString("resolved_task_model"); modelName != "" {
 		modelRequest.Model = modelName
+		if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+			request, requestErr := getModelFromJSONBody(c)
+			if requestErr != nil {
+				return nil, false, requestErr
+			}
+			modelRequest.Group = request.Group
+		}
 	} else if strings.Contains(c.Request.URL.Path, "/mj/") {
 		relayMode := relayconstant.Path2RelayModeMidjourney(c.Request.URL.Path)
 		if relayMode == relayconstant.RelayModeMidjourneyTaskFetch ||
@@ -397,6 +429,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 				}
 			}
 			modelRequest.Model = midjourneyModel
+			if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+				request, requestErr := getModelFromJSONBody(c)
+				if requestErr != nil {
+					return nil, false, requestErr
+				}
+				modelRequest.Group = request.Group
+			}
 		}
 		c.Set("relay_mode", relayMode)
 	} else if strings.Contains(c.Request.URL.Path, "/v1/videos/") && strings.HasSuffix(c.Request.URL.Path, "/remix") {
@@ -418,6 +457,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			if req != nil {
 				modelRequest.Model = req.Model
+				modelRequest.Group = req.Group
 			}
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -433,6 +473,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 				return nil, false, err
 			}
 			modelRequest.Model = req.Model
+			modelRequest.Group = req.Group
 			relayMode = relayconstant.RelayModeVideoSubmit
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -449,6 +490,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		if modelName != "" {
 			modelRequest.Model = modelName
 		}
+		if c.Request.Method == http.MethodPost && strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+			request, requestErr := getModelFromJSONBody(c)
+			if requestErr != nil {
+				return nil, false, requestErr
+			}
+			modelRequest.Group = request.Group
+		}
 		c.Set("relay_mode", relayMode)
 	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		req, err := getModelFromRequest(c)
@@ -456,6 +504,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
+		modelRequest.Group = req.Group
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
@@ -478,8 +527,11 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		contentType := c.ContentType()
 		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
 			req, err := getModelFromRequest(c)
-			if err == nil && req.Model != "" {
-				modelRequest.Model = req.Model
+			if err == nil {
+				if req.Model != "" {
+					modelRequest.Model = req.Model
+				}
+				modelRequest.Group = req.Group
 			}
 		}
 	}
@@ -490,15 +542,21 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "tts-1")
 		} else if strings.HasPrefix(c.Request.URL.Path, "/v1/audio/translations") {
 			// 先尝试从请求读取
-			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
-				modelRequest.Model = req.Model
+			if req, err := getModelFromRequest(c); err == nil {
+				if req.Model != "" {
+					modelRequest.Model = req.Model
+				}
+				modelRequest.Group = req.Group
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranslation
 		} else if strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") {
 			// 先尝试从请求读取
-			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
-				modelRequest.Model = req.Model
+			if req, err := getModelFromRequest(c); err == nil {
+				if req.Model != "" {
+					modelRequest.Model = req.Model
+				}
+				modelRequest.Group = req.Group
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranscription

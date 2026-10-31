@@ -232,3 +232,107 @@ func TestGetTokenAutoGroupsReturnsFullFilteredGlobalOrderAndLimit(t *testing.T) 
 	assert.Equal(t, []string{"vip", "default"}, data.Groups)
 	assert.Equal(t, 1, data.MaxCount)
 }
+
+func TestAddTokenPersistsAdditionalGroupsAndReturnsThem(t *testing.T) {
+	configureTokenAutoGroupsTest(t, "5", `["default","vip"]`)
+	user := setupTokenAutoGroupsControllerTest(t)
+	request := baseAutoTokenRequest("multi-group-token")
+	request["group"] = "default"
+	request["cross_group_retry"] = false
+	request["allowed_groups"] = []string{"vip"}
+
+	ctx, recorder := newTokenAutoGroupsAuthenticatedContext(t, http.MethodPost, "/api/token/", request, user.Id)
+	AddToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var token model.Token
+	require.NoError(t, model.DB.Where("name = ?", "multi-group-token").First(&token).Error)
+	assert.JSONEq(t, `["vip"]`, token.AllowedGroups)
+
+	getCtx, getRecorder := newTokenAutoGroupsAuthenticatedContext(t, http.MethodGet, "/api/token/"+stringInt(token.Id), nil, user.Id)
+	getCtx.Params = append(getCtx.Params, gin.Param{Key: "id", Value: stringInt(token.Id)})
+	GetToken(getCtx)
+	getResponse := decodeAPIResponse(t, getRecorder)
+	require.True(t, getResponse.Success, getResponse.Message)
+	var responseData struct {
+		AllowedGroups []string `json:"allowed_groups"`
+	}
+	require.NoError(t, common.Unmarshal(getResponse.Data, &responseData))
+	assert.Equal(t, []string{"vip"}, responseData.AllowedGroups)
+}
+
+func TestUpdateTokenAllowedGroupsPreservesAndClearsExplicitly(t *testing.T) {
+	tests := []struct {
+		name         string
+		includeField bool
+		groups       []string
+		want         string
+	}{
+		{name: "omitted preserves", want: `["vip"]`},
+		{name: "empty clears", includeField: true},
+		{name: "replacement group persists", includeField: true, groups: []string{"vip"}, want: `["vip"]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureTokenAutoGroupsTest(t, "5", `["default","vip"]`)
+			user := setupTokenAutoGroupsControllerTest(t)
+			token := seedToken(t, model.DB, user.Id, "allowed-group-token", "allowed-group-token-key")
+			token.Group = "default"
+			token.AllowedGroups = `["vip"]`
+			require.NoError(t, model.DB.Save(token).Error)
+
+			request := baseAutoTokenRequest("updated-allowed-group-token")
+			request["id"] = token.Id
+			request["group"] = "default"
+			request["status"] = common.TokenStatusEnabled
+			if test.includeField {
+				request["allowed_groups"] = test.groups
+			}
+			ctx, recorder := newTokenAutoGroupsAuthenticatedContext(t, http.MethodPut, "/api/token/", request, user.Id)
+			UpdateToken(ctx)
+			response := decodeAPIResponse(t, recorder)
+			require.True(t, response.Success, response.Message)
+
+			var updated model.Token
+			require.NoError(t, model.DB.First(&updated, token.Id).Error)
+			if test.want == "" {
+				assert.Empty(t, updated.AllowedGroups)
+				return
+			}
+			assert.JSONEq(t, test.want, updated.AllowedGroups)
+		})
+	}
+}
+
+func TestAddTokenRejectsInvalidAdditionalGroups(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+	}{
+		{name: "duplicate", groups: []string{"vip", "vip"}},
+		{name: "default duplicated", groups: []string{"default"}},
+		{name: "auto pseudo group", groups: []string{"auto"}},
+		{name: "unavailable group", groups: []string{"missing"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureTokenAutoGroupsTest(t, "5", `["default","vip"]`)
+			user := setupTokenAutoGroupsControllerTest(t)
+			request := baseAutoTokenRequest("invalid-additional-group-" + test.name)
+			request["group"] = "default"
+			request["allowed_groups"] = test.groups
+
+			ctx, recorder := newTokenAutoGroupsAuthenticatedContext(t, http.MethodPost, "/api/token/", request, user.Id)
+			AddToken(ctx)
+
+			response := decodeAPIResponse(t, recorder)
+			assert.False(t, response.Success)
+			var count int64
+			require.NoError(t, model.DB.Model(&model.Token{}).Count(&count).Error)
+			assert.Zero(t, count)
+		})
+	}
+}

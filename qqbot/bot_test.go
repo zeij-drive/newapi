@@ -183,7 +183,7 @@ func TestC2CMessageHandlerReportsUnknownSlashCommand(t *testing.T) {
 	require.Equal(t, commandNotFoundMessage, sender.content)
 }
 
-func TestGroupATMessageHandlerRepliesWithoutClaimingInvite(t *testing.T) {
+func TestGroupATMessageHandlerEmailsInviteWithoutShowingCode(t *testing.T) {
 	sender := &testMessageSender{}
 	inviteSender := &testInviteEmailSender{}
 	handler := NewBot(sender, inviteSender).GroupATMessageHandler()
@@ -205,8 +205,38 @@ func TestGroupATMessageHandlerRepliesWithoutClaimingInvite(t *testing.T) {
 		Content: "<@!bot-id> /sapi 邀请码 person@example.com",
 		Author:  &dto.User{ID: "qq-open-id"},
 	}))
-	require.Equal(t, groupInviteMessage, sender.content)
+	require.Equal(t, 1, inviteSender.calls)
+	require.Equal(t, "qq-open-id", inviteSender.openID)
+	require.Equal(t, "person@example.com", inviteSender.email)
+	require.Equal(t, "group-open-id", sender.groupID)
+	require.Equal(t, inviteSentMessage, sender.content)
+	require.NotContains(t, sender.content, "person@example.com")
+	require.NotContains(t, sender.content, "SAPI-")
+}
+
+func TestGroupATMessageHandlerValidatesInviteEmailAndReportsRateLimit(t *testing.T) {
+	sender := &testMessageSender{}
+	inviteSender := &testInviteEmailSender{}
+	handler := NewBot(sender, inviteSender).GroupATMessageHandler()
+
+	require.NoError(t, handler(nil, &dto.WSGroupATMessageData{
+		ID:      "missing-email-message",
+		GroupID: "group-open-id",
+		Content: "<@!bot-id> /sapi 邀请码",
+		Author:  &dto.User{ID: "qq-open-id"},
+	}))
+	require.Equal(t, inviteUsageMessage, sender.content)
 	require.Equal(t, 0, inviteSender.calls)
+
+	inviteSender.err = errInviteEmailRateLimited
+	require.NoError(t, handler(nil, &dto.WSGroupATMessageData{
+		ID:      "rate-limited-message",
+		GroupID: "group-open-id",
+		Content: "<@!bot-id> /sapi 邀请码 person@example.com",
+		Author:  &dto.User{ID: "qq-open-id"},
+	}))
+	require.Equal(t, 1, inviteSender.calls)
+	require.Equal(t, inviteRateLimitedMessage, sender.content)
 }
 
 func TestGroupATMessageHandlerReportsUnknownCommand(t *testing.T) {

@@ -25,10 +25,13 @@ $groupMessage = [
     ],
 ];
 if (!handleC2CMessage([], $groupMessage)) {
-    throw new RuntimeException('PHP QQ bot must ignore invite commands in group messages');
+    throw new RuntimeException('PHP QQ bot must ignore group events in the C2C handler');
 }
-if (groupCommandReply('<@!bot-id> /sapi 邀请码 user@example.com') !== '邀请码仅支持私聊，请私聊机器人发送 /sapi 邀请码 邮箱。') {
-    throw new RuntimeException('PHP QQ bot group invite command must only direct users to private chat');
+$groupInviteCommand = parseGroupCommand('<@!bot-id> /sapi 邀请码 user@example.com');
+if ($groupInviteCommand !== ['invite', true]
+    || !isValidInviteEmail('user@example.com')
+    || strpos(groupCommandReply('<@!bot-id> /sapi'), '仅支持私聊') !== false) {
+    throw new RuntimeException('PHP QQ bot must recognize group invite commands and allow group use');
 }
 if (groupCommandReply('<@!bot-id> /sapi') === null) {
     throw new RuntimeException('PHP QQ bot must recognize commands after a group mention');

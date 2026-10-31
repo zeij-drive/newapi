@@ -215,6 +215,20 @@ func SetApiRouter(router *gin.Engine) {
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{
+			optionRoute.GET("/sub2api-ratio-sync", controller.GetSub2APIRatioSyncState)
+			optionRoute.PUT("/sub2api-ratio-sync/settings", controller.SaveSub2APIRatioSyncSettings)
+			optionRoute.PUT("/sub2api-ratio-sync/mappings", controller.SaveSub2APIRatioSyncMappings)
+			optionRoute.POST("/sub2api-ratio-sync/tokens", controller.ImportSub2APIRatioSyncTokens)
+			optionRoute.DELETE("/sub2api-ratio-sync/tokens", controller.ClearSub2APIRatioSyncTokens)
+			optionRoute.POST("/sub2api-ratio-sync/groups/refresh", controller.RefreshSub2APIRatioSyncGroups)
+			optionRoute.POST("/sub2api-ratio-sync/preview", controller.PreviewSub2APIRatioSync)
+			optionRoute.POST("/sub2api-ratio-sync/sync", controller.RunSub2APIRatioSync)
+			optionRoute.POST("/sub2api-ratio-sync/monitor/start", controller.StartSub2APIRatioSync)
+			optionRoute.POST("/sub2api-ratio-sync/monitor/stop", controller.StopSub2APIRatioSync)
+			optionRoute.GET("/sub2api-ratio-sync/pair/login-helper", controller.GetSub2APIRatioSyncLoginHelper)
+			optionRoute.POST("/sub2api-ratio-sync/pair", controller.CreateSub2APIRatioSyncPair)
+			optionRoute.POST("/sub2api-ratio-sync/pair/status", controller.CheckSub2APIRatioSyncPair)
+			optionRoute.GET("/sub2api-ratio-sync/backups/:id", controller.GetSub2APIRatioSyncBackup)
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.GET("/epay_gateways", controller.GetEpayGatewayConfig)
 			optionRoute.GET("/registration-invites", controller.ListRegistrationInvites)
@@ -241,6 +255,7 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
+		apiRouter.POST("/sub2api-ratio-sync/pair", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.ReceiveSub2APIRatioSyncPair)
 
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")

@@ -174,6 +174,17 @@ export function ApiKeysMutateDrawer({
     () => groups.filter((group) => group.value !== 'auto').map((g) => g.value),
     [groups]
   )
+  const additionalGroupOptions = useMemo(
+    () =>
+      groups
+        .filter((group) => group.value !== 'auto')
+        .map((group) => ({
+          value: group.value,
+          label: group.label,
+          hint: group.desc,
+        })),
+    [groups]
+  )
   const globalAutoGroups = useMemo(() => {
     const available = new Set(availableAutoGroupNames)
     return (autoGroupsData?.data?.groups || []).filter((group) =>
@@ -429,10 +440,24 @@ export function ApiKeysMutateDrawer({
                         onValueChange={(group) => {
                           field.onChange(group)
                           if (group === 'auto') {
+                            form.setValue('allowed_groups', [], {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
                             form.setValue('cross_group_retry', true, {
                               shouldDirty: true,
                             })
                             return
+                          }
+                          const allowedGroups = form.getValues('allowed_groups')
+                          if (allowedGroups.includes(group)) {
+                            form.setValue(
+                              'allowed_groups',
+                              allowedGroups.filter(
+                                (allowedGroup) => allowedGroup !== group
+                              ),
+                              { shouldDirty: true, shouldValidate: true }
+                            )
                           }
                           form.setValue('cross_group_retry', false, {
                             shouldDirty: true,
@@ -445,6 +470,34 @@ export function ApiKeysMutateDrawer({
                   </FormItem>
                 )}
               />
+
+              {selectedGroup !== 'auto' && (
+                <FormField
+                  control={form.control}
+                  name='allowed_groups'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Additional groups')}</FormLabel>
+                      <FormControl>
+                        <MultiSelect
+                          options={additionalGroupOptions.filter(
+                            (group) => group.value !== selectedGroup
+                          )}
+                          selected={field.value}
+                          onChange={field.onChange}
+                          placeholder={t('Select additional groups')}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Set the group field in an API request to use an additional group; otherwise, the default group is used.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               {selectedGroup === 'auto' && (
                 <FormField

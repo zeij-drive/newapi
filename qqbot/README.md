@@ -30,9 +30,9 @@ QQ_BOT_PUBLIC_URL=https://你的机器人域名/qqbot
 
 ### 1.3 QQ 回调地址
 
-将 QQ 开放平台的 Webhook 地址设置为 `https://你的机器人域名/qqbot/`（如果上传到网站根目录则使用 `https://你的机器人域名/`），订阅 `C2C_MESSAGE_CREATE` 和 `GROUP_AT_MESSAGE_CREATE` 两个事件。群聊中必须 @机器人；群聊 `/sapi` 会回复帮助，群聊 `/sapi 邀请码 邮箱` 只提示改用私聊，不会发送邀请码。私聊使用 `/sapi 邀请码 邮箱`，邀请码会发到指定邮箱，不会明文回复在 QQ 聊天中。`.htaccess` 会把不存在的路径转发到 `index.php`；若主机不支持 Apache rewrite，可直接填写 `https://你的机器人域名/qqbot/index.php`。
+将 QQ 开放平台的 Webhook 地址设置为 `https://你的机器人域名/qqbot/`（如果上传到网站根目录则使用 `https://你的机器人域名/`），订阅 `C2C_MESSAGE_CREATE` 和 `GROUP_AT_MESSAGE_CREATE` 两个事件。群聊中必须 @机器人；私聊或群聊中都可以发送 `/sapi 邀请码 邮箱`，机器人会把邀请码发到指定邮箱，QQ 回复不会包含邀请码或邮箱地址。群聊命令中的邮箱参数会显示在群消息中。`.htaccess` 会把不存在的路径转发到 `index.php`；若主机不支持 Apache rewrite，可直接填写 `https://你的机器人域名/qqbot/index.php`。
 
-`GET /healthz` 会返回 204，可用于面板健康检查；其他 GET 请求返回 405。QQ 的校验、心跳、签名验证、`/sapi` 和 `/gptstatus` 群聊命令均由 `index.php` 完成。群聊中 @机器人后发送 `/gptstatus` 会抓取 `https://status.openai.com/` 网页 HTML 源码、解析 GPT 状态并发送状态图片；每次指令均为单次查询，不提供自动推送，旧的 `/gptstatus auto on/off` 命令会提示“指令不存在”。图片使用带过期签名的私有接口生成，不会把状态图片或长期访问令牌放在公开目录。私聊发送 `/sapi 邀请码 邮箱` 后，NewAPI 会按现有邮箱验证策略校验地址，并通过管理员配置的 SMTP 发出邀请码；QQ 仅收到发送结果。请求使用短时效 HMAC-SHA256 签名（时间戳、随机 nonce、请求体摘要）调用 NewAPI `/api/bot/registration-invite`，邮箱也包含在签名请求体内；NewAPI 原子拒绝重复 nonce，并保证每个 QQ OpenID 只有一个邀请码。
+`GET /healthz` 会返回 204，可用于面板健康检查；其他 GET 请求返回 405。QQ 的校验、心跳、签名验证、`/sapi` 和 `/gptstatus` 群聊命令均由 `index.php` 完成。群聊中 @机器人后发送 `/gptstatus` 会抓取 `https://status.openai.com/` 网页 HTML 源码、解析 GPT 状态并发送状态图片；每次指令均为单次查询，不提供自动推送，旧的 `/gptstatus auto on/off` 命令会提示“指令不存在”。图片使用带过期签名的私有接口生成，不会把状态图片或长期访问令牌放在公开目录。私聊或群聊发送 `/sapi 邀请码 邮箱` 后，NewAPI 会按现有邮箱验证策略校验地址，并通过管理员配置的 SMTP 发出邀请码；QQ 回复只显示发送结果。请求使用短时效 HMAC-SHA256 签名（时间戳、随机 nonce、请求体摘要）调用 NewAPI `/api/bot/registration-invite`，邮箱也包含在签名请求体内；NewAPI 原子拒绝重复 nonce，并保证每个 QQ OpenID 只有一个邀请码。
 
 PHP 文件和示例配置位于 `qqbot/php/`：
 
@@ -93,9 +93,9 @@ sudo systemctl status starryapi-qqbot
 sudo journalctl -u starryapi-qqbot -f
 ```
 
-服务使用独立的动态用户运行，并自动重启。使用 Nginx/Caddy 等反向代理，将公开 HTTPS 的 `/qqbot` 路径转发至 `127.0.0.1:9000/qqbot`；然后在 QQ Bot 开放平台将 HTTPS 回调地址设为 `https://你的机器人域名/qqbot`，并订阅 `C2C_MESSAGE_CREATE` 与 `GROUP_AT_MESSAGE_CREATE`。群聊中必须 @机器人；`/sapi 邀请码 邮箱` 只在 C2C 私聊中生效。`GET /healthz` 可用于健康检查。
+服务使用独立的动态用户运行，并自动重启。使用 Nginx/Caddy 等反向代理，将公开 HTTPS 的 `/qqbot` 路径转发至 `127.0.0.1:9000/qqbot`；然后在 QQ Bot 开放平台将 HTTPS 回调地址设为 `https://你的机器人域名/qqbot`，并订阅 `C2C_MESSAGE_CREATE` 与 `GROUP_AT_MESSAGE_CREATE`。群聊中必须 @机器人；`/sapi 邀请码 邮箱` 在私聊和群聊均可用。群聊命令输入的邮箱会显示在群消息中。`GET /healthz` 可用于健康检查。
 
-`/gptstatus` 每次都会抓取 `https://status.openai.com/` 网页 HTML 源码并解析状态，然后发送 PNG 状态图；自动推送和订阅功能已移除，旧的 `/gptstatus auto on/off` 命令会提示“指令不存在”。私聊 `/sapi 邀请码 邮箱` 会通过 NewAPI SMTP 发送邀请码，机器人不会在 QQ 消息中回传邀请码明文；邮箱受 NewAPI 邮箱策略限制。图片链接由 Bot 提供并使用短时签名，`QQ_BOT_PUBLIC_URL` 必须填写 QQ 服务器能够访问的 HTTPS origin（不包含路径），反向代理需同时转发 `/qqbot` 与 `/qqbot/gptstatus/image`。
+`/gptstatus` 每次都会抓取 `https://status.openai.com/` 网页 HTML 源码并解析状态，然后发送 PNG 状态图；自动推送和订阅功能已移除，旧的 `/gptstatus auto on/off` 命令会提示“指令不存在”。私聊或群聊中的 `/sapi 邀请码 邮箱` 会通过 NewAPI SMTP 发送邀请码，机器人不会在 QQ 消息中回传邀请码明文；邮箱受 NewAPI 邮箱策略限制。图片链接由 Bot 提供并使用短时签名，`QQ_BOT_PUBLIC_URL` 必须填写 QQ 服务器能够访问的 HTTPS origin（不包含路径），反向代理需同时转发 `/qqbot` 与 `/qqbot/gptstatus/image`。
 
 反向代理和虚拟主机需允许 QQ 平台向 webhook 入站访问，并允许 QQ Bot 主机通过 HTTPS 访问 NewAPI。不要把未经 TLS 保护的 webhook 端口直接暴露到公网。
 
