@@ -65,7 +65,12 @@ export type Sub2APIRatioSyncState = {
     mapping_scope: string
   }
   runtime: Sub2APIRatioSyncRuntime
-  auth: { upstream: boolean; refresh: boolean }
+  auth: {
+    upstream: boolean
+    refresh: boolean
+    pending_2fa: boolean
+    pending_2fa_email?: string
+  }
   server_time: number
 }
 
@@ -141,6 +146,39 @@ export async function importSub2APIRatioSyncTokens(request: {
 export async function clearSub2APIRatioSyncTokens() {
   const response = await api.delete<ApiResponse<Sub2APIRatioSyncState>>(
     `${basePath}/tokens`
+  )
+  return requireSuccess(response.data)
+}
+
+export type Sub2APIRatioSyncLoginResult = {
+  requires_2fa: boolean
+  email?: string
+  refresh: boolean
+}
+
+export async function loginSub2APIRatioSyncUpstream(request: {
+  email: string
+  password: string
+  captcha_json: string
+}) {
+  const response = await api.post<ApiResponse<Sub2APIRatioSyncLoginResult>>(
+    `${basePath}/tokens/login`,
+    request
+  )
+  return requireSuccess(response.data)
+}
+
+export async function verifySub2APIRatioSyncUpstream2FA(totp_code: string) {
+  const response = await api.post<ApiResponse<Sub2APIRatioSyncLoginResult>>(
+    `${basePath}/tokens/login/2fa`,
+    { totp_code }
+  )
+  return requireSuccess(response.data)
+}
+
+export async function logoutSub2APIRatioSyncUpstream() {
+  const response = await api.post<ApiResponse<Sub2APIRatioSyncState>>(
+    `${basePath}/tokens/logout`
   )
   return requireSuccess(response.data)
 }

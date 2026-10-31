@@ -45,6 +45,8 @@ import {
   getSub2APIRatioSyncLoginHelper,
   getSub2APIRatioSyncState,
   importSub2APIRatioSyncTokens,
+  loginSub2APIRatioSyncUpstream,
+  logoutSub2APIRatioSyncUpstream,
   previewSub2APIRatioSync,
   refreshSub2APIRatioSyncGroups,
   runSub2APIRatioSync,
@@ -52,6 +54,7 @@ import {
   saveSub2APIRatioSyncSettings,
   startSub2APIRatioSync,
   stopSub2APIRatioSync,
+  verifySub2APIRatioSyncUpstream2FA,
   type Sub2APIRatioSyncMapping,
   type Sub2APIRatioSyncResult,
   type Sub2APIRatioSyncState,
@@ -225,6 +228,42 @@ export function Sub2APIRatioSyncPage() {
     },
   })
 
+  const loginMutation = useMutation({
+    mutationFn: loginSub2APIRatioSyncUpstream,
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: stateQueryKey })
+      if (!result.requires_2fa) {
+        toast.success(t('Upstream account login completed.'))
+      }
+    },
+    onError: (error: Error) =>
+      handleServerError(error, t('Failed to log in to the upstream account.')),
+  })
+
+  const twoFactorMutation = useMutation({
+    mutationFn: verifySub2APIRatioSyncUpstream2FA,
+    onSuccess: async () => {
+      toast.success(t('Upstream two-factor verification completed.'))
+      await queryClient.invalidateQueries({ queryKey: stateQueryKey })
+    },
+    onError: (error: Error) =>
+      handleServerError(error, t('Failed to verify the upstream code.')),
+  })
+
+  const logoutMutation = useMutation({
+    mutationFn: logoutSub2APIRatioSyncUpstream,
+    onSuccess: async (result) => {
+      queryClient.setQueryData(stateQueryKey, result)
+      toast.success(t('Upstream session logged out.'))
+      await queryClient.invalidateQueries({ queryKey: stateQueryKey })
+    },
+    onError: (error: Error) =>
+      handleServerError(
+        error,
+        t('Failed to log out from the upstream account.')
+      ),
+  })
+
   const helperMutation = useMutation({
     mutationFn: getSub2APIRatioSyncLoginHelper,
     onError: (error: Error) =>
@@ -283,7 +322,12 @@ export function Sub2APIRatioSyncPage() {
   }
 
   const state = stateQuery.data
-  const busy = actionMutation.isPending || pairMutation.isPending
+  const busy =
+    actionMutation.isPending ||
+    pairMutation.isPending ||
+    loginMutation.isPending ||
+    twoFactorMutation.isPending ||
+    logoutMutation.isPending
 
   const openLogin = () => {
     setPairMessage('')
@@ -376,6 +420,9 @@ export function Sub2APIRatioSyncPage() {
           })
         }
         onClearTokens={() => actionMutation.mutate({ kind: 'clear-tokens' })}
+        onLogin={(values) => loginMutation.mutateAsync(values)}
+        onLogin2FA={(code) => twoFactorMutation.mutateAsync(code)}
+        onLogout={() => logoutMutation.mutateAsync()}
         onOpenLogin={openLogin}
         onGetHelper={() => helperMutation.mutateAsync()}
       />

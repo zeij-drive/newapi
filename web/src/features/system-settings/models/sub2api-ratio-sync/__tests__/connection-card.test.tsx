@@ -43,13 +43,21 @@ const state: Sub2APIRatioSyncState = {
     logs: [],
     backups: [],
   },
-  auth: { upstream: false, refresh: false },
+  auth: { upstream: false, refresh: false, pending_2fa: false },
   server_time: 0,
 }
 
 function renderConnectionCard(
   onSave: (values: ConnectionValues) => Promise<unknown>
 ) {
+  const onLogin = vi.fn().mockResolvedValue({
+    requires_2fa: false,
+    refresh: true,
+  })
+  const onLogin2FA = vi.fn().mockResolvedValue({
+    requires_2fa: false,
+    refresh: true,
+  })
   render(
     <ConnectionCard
       state={state}
@@ -59,18 +67,25 @@ function renderConnectionCard(
       onSave={onSave}
       onImportTokens={vi.fn().mockResolvedValue(undefined)}
       onClearTokens={vi.fn()}
+      onLogin={onLogin}
+      onLogin2FA={onLogin2FA}
+      onLogout={vi.fn().mockResolvedValue(undefined)}
       onOpenLogin={vi.fn()}
       onGetHelper={vi.fn().mockResolvedValue('')}
     />
   )
-  return screen.getByLabelText('Sub2API base URL')
+  return {
+    urlInput: screen.getByLabelText('Sub2API base URL'),
+    onLogin,
+    onLogin2FA,
+  }
 }
 
 describe('Sub2API connection URL validation', () => {
   it('rejects remote HTTP URLs before saving', async () => {
     const user = userEvent.setup()
     const onSave = vi.fn().mockResolvedValue(undefined)
-    const urlInput = renderConnectionCard(onSave)
+    const { urlInput } = renderConnectionCard(onSave)
 
     await user.clear(urlInput)
     await user.type(urlInput, 'http://sub2api.example')
@@ -97,7 +112,7 @@ describe('Sub2API connection URL validation', () => {
   it('allows localhost HTTP for local development', async () => {
     const user = userEvent.setup()
     const onSave = vi.fn().mockResolvedValue(undefined)
-    const urlInput = renderConnectionCard(onSave)
+    const { urlInput } = renderConnectionCard(onSave)
 
     await user.clear(urlInput)
     await user.type(urlInput, 'http://localhost:3000')
@@ -114,7 +129,7 @@ describe('Sub2API connection URL validation', () => {
   it('allows HTTPS for remote upstreams', async () => {
     const user = userEvent.setup()
     const onSave = vi.fn().mockResolvedValue(undefined)
-    const urlInput = renderConnectionCard(onSave)
+    const { urlInput } = renderConnectionCard(onSave)
 
     await user.clear(urlInput)
     await user.type(urlInput, 'https://new-sub2api.example')
@@ -126,5 +141,48 @@ describe('Sub2API connection URL validation', () => {
         interval_seconds: 60,
       })
     )
+  })
+
+  it('sends account credentials and captcha JSON to the upstream login action', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    const { onLogin } = renderConnectionCard(onSave)
+
+    await user.click(screen.getByRole('button', { name: 'Use account login' }))
+    await user.type(screen.getByLabelText('Email'), 'admin@example.com')
+    await user.type(screen.getByLabelText('Password'), 'secret-password')
+    await user.click(screen.getByLabelText('Captcha fields (optional JSON)'))
+    await user.paste('{"turnstile_token":"captcha"}')
+    await user.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() =>
+      expect(onLogin).toHaveBeenCalledWith({
+        email: 'admin@example.com',
+        password: 'secret-password',
+        captcha_json: '{"turnstile_token":"captcha"}',
+      })
+    )
+  })
+
+  it('switches to two-factor verification when upstream requests it', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    const { onLogin, onLogin2FA } = renderConnectionCard(onSave)
+    onLogin.mockResolvedValue({
+      requires_2fa: true,
+      email: 'a***@example.com',
+      refresh: false,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Use account login' }))
+    await user.type(screen.getByLabelText('Email'), 'admin@example.com')
+    await user.type(screen.getByLabelText('Password'), 'secret-password')
+    await user.click(screen.getByRole('button', { name: 'Login' }))
+
+    expect(await screen.findByLabelText('Verification code')).toBeVisible()
+    await user.type(screen.getByLabelText('Verification code'), '123456')
+    await user.click(screen.getByRole('button', { name: 'Complete login' }))
+
+    await waitFor(() => expect(onLogin2FA).toHaveBeenCalledWith('123456'))
   })
 })

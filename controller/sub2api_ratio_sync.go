@@ -31,6 +31,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"reflect"
 	"slices"
@@ -135,11 +136,18 @@ type sub2APIRatioSyncPair struct {
 	UsedAt    int64  `json:"used_at"`
 }
 
+type sub2APIRatioSyncPendingLogin struct {
+	TempToken string `json:"temp_token"`
+	Email     string `json:"email,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 type sub2APIRatioSyncSecrets struct {
-	AccessToken  string                 `json:"access_token"`
-	RefreshToken string                 `json:"refresh_token"`
-	ExpiresAt    int64                  `json:"expires_at"`
-	Pairs        []sub2APIRatioSyncPair `json:"pairs"`
+	AccessToken  string                        `json:"access_token"`
+	RefreshToken string                        `json:"refresh_token"`
+	ExpiresAt    int64                         `json:"expires_at"`
+	PendingLogin *sub2APIRatioSyncPendingLogin `json:"pending_login,omitempty"`
+	Pairs        []sub2APIRatioSyncPair        `json:"pairs"`
 }
 
 type sub2APIRatioSyncState struct {
@@ -152,8 +160,10 @@ type sub2APIRatioSyncPublicState struct {
 	Settings sub2APIRatioSyncSettings `json:"settings"`
 	Runtime  sub2APIRatioSyncRuntime  `json:"runtime"`
 	Auth     struct {
-		Upstream bool `json:"upstream"`
-		Refresh  bool `json:"refresh"`
+		Upstream        bool   `json:"upstream"`
+		Refresh         bool   `json:"refresh"`
+		Pending2FA      bool   `json:"pending_2fa"`
+		Pending2FAEmail string `json:"pending_2fa_email,omitempty"`
 	} `json:"auth"`
 	ServerTime int64 `json:"server_time"`
 }
@@ -220,6 +230,12 @@ func loadSub2APIRatioSyncState() (sub2APIRatioSyncState, error) {
 	if state.Secrets.Pairs == nil {
 		state.Secrets.Pairs = []sub2APIRatioSyncPair{}
 	}
+	if state.Secrets.PendingLogin != nil {
+		pending := state.Secrets.PendingLogin
+		if pending.TempToken == "" || pending.CreatedAt <= 0 || pending.CreatedAt+10*60 < time.Now().Unix() {
+			state.Secrets.PendingLogin = nil
+		}
+	}
 	if state.Runtime.Groups == nil {
 		state.Runtime.Groups = []sub2APIRatioSyncGroup{}
 	}
@@ -277,6 +293,10 @@ func publicSub2APIRatioSyncState(state sub2APIRatioSyncState) sub2APIRatioSyncPu
 	view := sub2APIRatioSyncPublicState{Settings: state.Settings, Runtime: state.Runtime, ServerTime: time.Now().Unix()}
 	view.Auth.Upstream = state.Secrets.AccessToken != "" || state.Secrets.RefreshToken != ""
 	view.Auth.Refresh = state.Secrets.RefreshToken != ""
+	if pending := state.Secrets.PendingLogin; pending != nil && pending.CreatedAt+10*60 >= time.Now().Unix() {
+		view.Auth.Pending2FA = true
+		view.Auth.Pending2FAEmail = pending.Email
+	}
 	return view
 }
 
@@ -366,6 +386,143 @@ func cleanSub2APIToken(raw string) (string, error) {
 		return "", errors.New("上游令牌格式不正确")
 	}
 	return raw, nil
+}
+
+type sub2APIRatioSyncLoginResult struct {
+	Requires2FA bool   `json:"requires_2fa"`
+	Email       string `json:"email,omitempty"`
+	Refresh     bool   `json:"refresh"`
+}
+
+func cleanSub2APIRatioSyncLoginString(value any, label string, maxLength int, trim bool) (string, error) {
+	raw, ok := value.(string)
+	if !ok {
+		return "", errors.New(label + "格式不正确")
+	}
+	if trim {
+		raw = strings.TrimSpace(raw)
+	}
+	if raw == "" || len(raw) > maxLength || strings.ContainsAny(raw, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f") {
+		return "", errors.New(label + "格式不正确")
+	}
+	return raw, nil
+}
+
+func validateSub2APIRatioSyncCaptcha(captcha map[string]any) (map[string]string, error) {
+	if len(captcha) > 32 {
+		return nil, errors.New("验证码字段格式不正确")
+	}
+	validated := make(map[string]string, len(captcha))
+	for key, value := range captcha {
+		if len(key) == 0 || len(key) > 64 || (key[0] < 'A' || key[0] > 'Z') && (key[0] < 'a' || key[0] > 'z') {
+			return nil, errors.New("验证码字段格式不正确")
+		}
+		for i := 1; i < len(key); i++ {
+			char := key[i]
+			if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+				return nil, errors.New("验证码字段格式不正确")
+			}
+		}
+		if key == "email" || key == "password" {
+			return nil, errors.New("验证码字段格式不正确")
+		}
+		cleaned, err := cleanSub2APIRatioSyncLoginString(value, "验证码字段", 4096, false)
+		if err != nil {
+			return nil, err
+		}
+		validated[key] = cleaned
+	}
+	return validated, nil
+}
+
+func sub2APIRatioSyncLoginPayload(email, password string, captcha map[string]any, captchaJSON string) (map[string]any, error) {
+	cleanEmail, err := cleanSub2APIRatioSyncLoginString(email, "邮箱", 320, true)
+	if err != nil {
+		return nil, err
+	}
+	parsedEmail, err := mail.ParseAddress(cleanEmail)
+	if err != nil || parsedEmail.Address != cleanEmail {
+		return nil, errors.New("邮箱格式不正确")
+	}
+	cleanPassword, err := cleanSub2APIRatioSyncLoginString(password, "密码", 1024, false)
+	if err != nil {
+		return nil, err
+	}
+	if captchaJSON = strings.TrimSpace(captchaJSON); captchaJSON != "" {
+		var decoded map[string]any
+		if err := common.UnmarshalJsonStr(captchaJSON, &decoded); err != nil {
+			return nil, errors.New("验证码 JSON 格式不正确")
+		}
+		captcha = decoded
+	}
+	validatedCaptcha, err := validateSub2APIRatioSyncCaptcha(captcha)
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{"email": cleanEmail, "password": cleanPassword}
+	for key, value := range validatedCaptcha {
+		payload[key] = value
+	}
+	return payload, nil
+}
+
+func resetSub2APIRatioSyncAfterAuth(state *sub2APIRatioSyncState) {
+	state.Runtime.Groups = []sub2APIRatioSyncGroup{}
+	state.Settings.Enabled = false
+	state.Runtime.Failures = 0
+	state.Runtime.Baseline = map[string]sub2APIRatioSyncBaseline{}
+	state.Runtime.NextRun = 0
+}
+
+func saveSub2APIRatioSyncAuthResponse(state *sub2APIRatioSyncState, response sub2APIRatioSyncAPIResponse) (sub2APIRatioSyncLoginResult, error) {
+	if response.Code != 0 {
+		return sub2APIRatioSyncLoginResult{}, errors.New("上游登录失败，请检查账号、密码和验证码")
+	}
+	var data struct {
+		AccessToken     string `json:"access_token"`
+		RefreshToken    string `json:"refresh_token"`
+		ExpiresIn       int64  `json:"expires_in"`
+		Requires2FA     bool   `json:"requires_2fa"`
+		TempToken       string `json:"temp_token"`
+		UserEmailMasked string `json:"user_email_masked"`
+	}
+	if err := common.Unmarshal(response.Data, &data); err != nil {
+		return sub2APIRatioSyncLoginResult{}, errors.New("上游登录响应格式不正确")
+	}
+	if data.Requires2FA || data.TempToken != "" && data.AccessToken == "" {
+		if data.TempToken == "" || len(data.TempToken) > 4096 || strings.ContainsAny(data.TempToken, "\r\n") {
+			return sub2APIRatioSyncLoginResult{}, errors.New("上游二次验证响应格式不正确")
+		}
+		maskedEmail := strings.TrimSpace(data.UserEmailMasked)
+		if len(maskedEmail) > 320 || strings.ContainsAny(maskedEmail, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f") {
+			maskedEmail = ""
+		}
+		state.Secrets.AccessToken = ""
+		state.Secrets.RefreshToken = ""
+		state.Secrets.ExpiresAt = 0
+		state.Secrets.PendingLogin = &sub2APIRatioSyncPendingLogin{
+			TempToken: data.TempToken, Email: maskedEmail, CreatedAt: time.Now().Unix(),
+		}
+		resetSub2APIRatioSyncAfterAuth(state)
+		return sub2APIRatioSyncLoginResult{Requires2FA: true, Email: maskedEmail}, nil
+	}
+	access, err := cleanSub2APIToken(data.AccessToken)
+	if err != nil || access == "" {
+		return sub2APIRatioSyncLoginResult{}, errors.New("上游登录未返回有效会话")
+	}
+	refresh, err := cleanSub2APIToken(data.RefreshToken)
+	if err != nil {
+		return sub2APIRatioSyncLoginResult{}, errors.New("上游刷新令牌格式不正确")
+	}
+	state.Secrets.AccessToken = access
+	state.Secrets.RefreshToken = refresh
+	state.Secrets.ExpiresAt = 0
+	if data.ExpiresIn > 0 {
+		state.Secrets.ExpiresAt = time.Now().Add(time.Duration(min(data.ExpiresIn, int64(10*365*24*60*60))) * time.Second).Unix()
+	}
+	state.Secrets.PendingLogin = nil
+	resetSub2APIRatioSyncAfterAuth(state)
+	return sub2APIRatioSyncLoginResult{Refresh: refresh != ""}, nil
 }
 
 type sub2APIRatioSyncAPIResponse struct {
@@ -815,6 +972,7 @@ func SaveSub2APIRatioSyncSettings(c *gin.Context) {
 		state.Secrets.AccessToken = ""
 		state.Secrets.RefreshToken = ""
 		state.Secrets.ExpiresAt = 0
+		state.Secrets.PendingLogin = nil
 		state.Secrets.Pairs = []sub2APIRatioSyncPair{}
 		state.Runtime.Groups = []sub2APIRatioSyncGroup{}
 		state.Settings.MappingScope = ""
@@ -869,6 +1027,7 @@ func ImportSub2APIRatioSyncTokens(c *gin.Context) {
 	state.Secrets.AccessToken = access
 	state.Secrets.RefreshToken = refresh
 	state.Secrets.ExpiresAt = 0
+	state.Secrets.PendingLogin = nil
 	state.Secrets.Pairs = []sub2APIRatioSyncPair{}
 	state.Settings.Enabled = false
 	state.Runtime.Failures = 0
@@ -876,6 +1035,141 @@ func ImportSub2APIRatioSyncTokens(c *gin.Context) {
 	state.Runtime.Baseline = map[string]sub2APIRatioSyncBaseline{}
 	state.Runtime.NextRun = 0
 	appendSub2APIRatioSyncLog(&state, "info", "上游会话凭据已安全保存", nil)
+	if err := saveSub2APIRatioSyncState(state); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, publicSub2APIRatioSyncState(state))
+}
+
+func LoginSub2APIRatioSyncUpstream(c *gin.Context) {
+	var request struct {
+		Email       string         `json:"email"`
+		Password    string         `json:"password"`
+		Captcha     map[string]any `json:"captcha"`
+		CaptchaJSON string         `json:"captcha_json"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	payload, err := sub2APIRatioSyncLoginPayload(request.Email, request.Password, request.Captcha, request.CaptchaJSON)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	sub2APIRatioSyncMu.Lock()
+	defer sub2APIRatioSyncMu.Unlock()
+	state, err := loadSub2APIRatioSyncState()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if state.Settings.UpstreamURL == "" {
+		common.ApiError(c, errors.New("请先保存上游站点地址"))
+		return
+	}
+	response, status, err := requestSub2API(c.Request.Context(), state.Settings.UpstreamURL, "/api/v1/auth/login", "", http.MethodPost, payload)
+	if err != nil {
+		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
+			common.ApiError(c, errors.New("上游登录失败，请检查账号、密码、验证码和站点地址"))
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	result, err := saveSub2APIRatioSyncAuthResponse(&state, response)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if result.Requires2FA {
+		appendSub2APIRatioSyncLog(&state, "info", "上游账号密码验证成功，等待二次验证", nil)
+	} else {
+		appendSub2APIRatioSyncLog(&state, "success", "上游账号登录完成，会话已加密保存", nil)
+	}
+	if err := saveSub2APIRatioSyncState(state); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+
+func VerifySub2APIRatioSyncUpstream2FA(c *gin.Context) {
+	var request struct {
+		TOTPCode string `json:"totp_code"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	code := strings.TrimSpace(request.TOTPCode)
+	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+		common.ApiError(c, errors.New("二次验证码必须是 6 位数字"))
+		return
+	}
+	sub2APIRatioSyncMu.Lock()
+	defer sub2APIRatioSyncMu.Unlock()
+	state, err := loadSub2APIRatioSyncState()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pending := state.Secrets.PendingLogin
+	if pending == nil || pending.TempToken == "" || pending.CreatedAt+10*60 < time.Now().Unix() {
+		state.Secrets.PendingLogin = nil
+		if saveErr := saveSub2APIRatioSyncState(state); saveErr != nil {
+			common.ApiError(c, saveErr)
+			return
+		}
+		common.ApiError(c, errors.New("二次验证已过期，请重新登录上游"))
+		return
+	}
+	response, status, err := requestSub2API(c.Request.Context(), state.Settings.UpstreamURL, "/api/v1/auth/login/2fa", "", http.MethodPost, map[string]string{
+		"temp_token": pending.TempToken,
+		"totp_code":  code,
+	})
+	if err != nil {
+		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
+			common.ApiError(c, errors.New("二次验证码不正确或已过期"))
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	result, err := saveSub2APIRatioSyncAuthResponse(&state, response)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if result.Requires2FA {
+		common.ApiError(c, errors.New("上游仍需要二次验证"))
+		return
+	}
+	appendSub2APIRatioSyncLog(&state, "success", "上游二次验证完成，会话已加密保存", nil)
+	if err := saveSub2APIRatioSyncState(state); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+
+func LogoutSub2APIRatioSyncUpstream(c *gin.Context) {
+	sub2APIRatioSyncMu.Lock()
+	defer sub2APIRatioSyncMu.Unlock()
+	state, err := loadSub2APIRatioSyncState()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if state.Settings.UpstreamURL != "" && state.Secrets.RefreshToken != "" {
+		_, _, _ = requestSub2API(c.Request.Context(), state.Settings.UpstreamURL, "/api/v1/auth/logout", "", http.MethodPost, map[string]string{
+			"refresh_token": state.Secrets.RefreshToken,
+		})
+	}
+	state.Secrets = sub2APIRatioSyncSecrets{Pairs: []sub2APIRatioSyncPair{}}
+	resetSub2APIRatioSyncAfterAuth(&state)
+	appendSub2APIRatioSyncLog(&state, "info", "上游会话已退出", nil)
 	if err := saveSub2APIRatioSyncState(state); err != nil {
 		common.ApiError(c, err)
 		return

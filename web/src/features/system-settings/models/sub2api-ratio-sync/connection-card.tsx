@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ExternalLink, KeyRound, LoaderCircle } from 'lucide-react'
+import {
+  ExternalLink,
+  KeyRound,
+  LoaderCircle,
+  LogIn,
+  LogOut,
+} from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -31,7 +37,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type { Sub2APIRatioSyncState } from '@/features/system-settings/models/sub2api-ratio-sync-api'
+import type {
+  Sub2APIRatioSyncLoginResult,
+  Sub2APIRatioSyncState,
+} from '@/features/system-settings/models/sub2api-ratio-sync-api'
 
 const connectionSchema = z.object({
   upstream_url: z
@@ -73,6 +82,12 @@ const connectionSchema = z.object({
 
 export type ConnectionValues = z.infer<typeof connectionSchema>
 
+export type UpstreamLoginValues = {
+  email: string
+  password: string
+  captcha_json: string
+}
+
 type ConnectionCardProps = {
   state: Sub2APIRatioSyncState
   busy: boolean
@@ -84,6 +99,9 @@ type ConnectionCardProps = {
     refreshToken: string
   ) => Promise<unknown>
   onClearTokens: () => void
+  onLogin: (values: UpstreamLoginValues) => Promise<Sub2APIRatioSyncLoginResult>
+  onLogin2FA: (code: string) => Promise<Sub2APIRatioSyncLoginResult>
+  onLogout: () => Promise<unknown>
   onOpenLogin: () => void
   onGetHelper: () => Promise<string>
 }
@@ -95,6 +113,14 @@ export function ConnectionCard(props: ConnectionCardProps) {
   const [helperCode, setHelperCode] = useState('')
   const [helperOpen, setHelperOpen] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [loginMode, setLoginMode] = useState<'credentials' | '2fa'>(
+    'credentials'
+  )
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [captchaJSON, setCaptchaJSON] = useState('')
+  const [twoFactorCode, setTwoFactorCode] = useState('')
   const form = useForm<ConnectionValues>({
     resolver: zodResolver(connectionSchema),
     defaultValues: {
@@ -124,6 +150,57 @@ export function ConnectionCard(props: ConnectionCardProps) {
   const handleGetHelper = async () => {
     setHelperCode(await props.onGetHelper())
     setHelperOpen(true)
+  }
+
+  const openAccountLogin = () => {
+    setLoginMode(props.state.auth.pending_2fa ? '2fa' : 'credentials')
+    setTwoFactorCode('')
+    setLoginOpen(true)
+  }
+
+  const handleLoginOpenChange = (open: boolean) => {
+    setLoginOpen(open)
+    if (!open) {
+      setLoginPassword('')
+      setCaptchaJSON('')
+      setTwoFactorCode('')
+    }
+  }
+
+  const handleAccountLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    try {
+      const result = await props.onLogin({
+        email: loginEmail,
+        password: loginPassword,
+        captcha_json: captchaJSON,
+      })
+      if (result.requires_2fa) {
+        setLoginMode('2fa')
+        setTwoFactorCode('')
+        setLoginPassword('')
+        setCaptchaJSON('')
+        return
+      }
+      setLoginOpen(false)
+      setLoginPassword('')
+      setCaptchaJSON('')
+    } catch {
+      // The mutation reports the translated error; keep the dialog open.
+    }
+  }
+
+  const handleAccountTwoFactor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    try {
+      await props.onLogin2FA(twoFactorCode)
+      setLoginOpen(false)
+      setTwoFactorCode('')
+      setLoginPassword('')
+      setCaptchaJSON('')
+    } catch {
+      // The mutation reports the translated error; keep the dialog open.
+    }
   }
 
   return (
@@ -218,6 +295,16 @@ export function ConnectionCard(props: ConnectionCardProps) {
                 type='button'
                 variant='outline'
                 size='sm'
+                onClick={openAccountLogin}
+                disabled={props.busy || !props.state.settings.upstream_url}
+              >
+                <LogIn aria-hidden='true' />
+                {t('Use account login')}
+              </Button>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
                 onClick={props.onOpenLogin}
                 disabled={props.busy || !props.state.settings.upstream_url}
               >
@@ -239,15 +326,27 @@ export function ConnectionCard(props: ConnectionCardProps) {
                 {t('Get login helper')}
               </Button>
               {props.state.auth.upstream ? (
-                <Button
-                  type='button'
-                  variant='ghost'
-                  size='sm'
-                  onClick={() => setClearOpen(true)}
-                  disabled={props.busy}
-                >
-                  {t('Clear session')}
-                </Button>
+                <>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => void props.onLogout().catch(() => undefined)}
+                    disabled={props.busy}
+                  >
+                    <LogOut aria-hidden='true' />
+                    {t('Log out upstream')}
+                  </Button>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => setClearOpen(true)}
+                    disabled={props.busy}
+                  >
+                    {t('Clear session')}
+                  </Button>
+                </>
               ) : null}
             </div>
           </div>
@@ -304,6 +403,115 @@ export function ConnectionCard(props: ConnectionCardProps) {
           ) : null}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={loginOpen}
+        onOpenChange={handleLoginOpenChange}
+        title={
+          loginMode === 'credentials'
+            ? t('Upstream account login')
+            : t('Upstream two-factor verification')
+        }
+        description={
+          loginMode === 'credentials'
+            ? t(
+                'Your password is sent only to the configured upstream site and is not stored.'
+              )
+            : t('Enter the 6-digit code from your upstream authenticator.')
+        }
+        contentClassName='sm:max-w-lg'
+      >
+        {loginMode === 'credentials' ? (
+          <form className='grid gap-4' onSubmit={handleAccountLogin}>
+            <div className='space-y-2'>
+              <Label htmlFor='sub2api-login-email'>{t('Email')}</Label>
+              <Input
+                id='sub2api-login-email'
+                type='email'
+                autoComplete='username'
+                required
+                maxLength={320}
+                value={loginEmail}
+                onChange={(event) => setLoginEmail(event.target.value)}
+              />
+            </div>
+            <div className='space-y-2'>
+              <Label htmlFor='sub2api-login-password'>{t('Password')}</Label>
+              <Input
+                id='sub2api-login-password'
+                type='password'
+                autoComplete='current-password'
+                required
+                maxLength={1024}
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+              />
+            </div>
+            <div className='space-y-2'>
+              <Label htmlFor='sub2api-login-captcha'>
+                {t('Captcha fields (optional JSON)')}
+              </Label>
+              <Textarea
+                id='sub2api-login-captcha'
+                rows={4}
+                spellCheck={false}
+                placeholder='{"turnstile_token":"..."}'
+                value={captchaJSON}
+                onChange={(event) => setCaptchaJSON(event.target.value)}
+              />
+            </div>
+            <div className='flex justify-end gap-2'>
+              <Button
+                type='button'
+                variant='secondary'
+                onClick={() => setLoginOpen(false)}
+              >
+                {t('Cancel')}
+              </Button>
+              <Button type='submit' disabled={props.busy}>
+                {props.busy ? (
+                  <LoaderCircle className='animate-spin' aria-hidden='true' />
+                ) : null}
+                {t('Login')}
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <form className='grid gap-4' onSubmit={handleAccountTwoFactor}>
+            <div className='space-y-2'>
+              <Label htmlFor='sub2api-login-2fa'>
+                {t('Verification code')}
+              </Label>
+              <Input
+                id='sub2api-login-2fa'
+                inputMode='numeric'
+                autoComplete='one-time-code'
+                pattern='[0-9]{6}'
+                minLength={6}
+                maxLength={6}
+                required
+                value={twoFactorCode}
+                onChange={(event) => setTwoFactorCode(event.target.value)}
+              />
+            </div>
+            <div className='flex justify-end gap-2'>
+              <Button
+                type='button'
+                variant='secondary'
+                onClick={() => setLoginMode('credentials')}
+              >
+                {t('Back')}
+              </Button>
+              <Button type='submit' disabled={props.busy}>
+                {props.busy ? (
+                  <LoaderCircle className='animate-spin' aria-hidden='true' />
+                ) : null}
+                {t('Complete login')}
+              </Button>
+            </div>
+          </form>
+        )}
+      </Dialog>
 
       <Dialog
         open={helperOpen}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -294,9 +295,66 @@ func TestPublicSub2APIRatioSyncStateDoesNotExposeSessionTokens(t *testing.T) {
 	state := initialSub2APIRatioSyncState()
 	state.Secrets.AccessToken = "test-access-token"
 	state.Secrets.RefreshToken = "test-refresh-token"
+	state.Secrets.PendingLogin = &sub2APIRatioSyncPendingLogin{
+		TempToken: "temporary-login-token",
+		Email:     "a***@example.com",
+		CreatedAt: time.Now().Unix(),
+	}
 
 	encoded, err := common.Marshal(publicSub2APIRatioSyncState(state))
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), state.Secrets.AccessToken)
 	assert.NotContains(t, string(encoded), state.Secrets.RefreshToken)
+	assert.NotContains(t, string(encoded), state.Secrets.PendingLogin.TempToken)
+}
+
+func TestSub2APIRatioSyncLoginPayloadValidatesCredentialsAndFlattensCaptcha(t *testing.T) {
+	payload, err := sub2APIRatioSyncLoginPayload(
+		"admin@example.com",
+		"password-without-trimming",
+		map[string]any{"turnstile_token": "captcha-value"},
+		"",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "admin@example.com", payload["email"])
+	assert.Equal(t, "password-without-trimming", payload["password"])
+	assert.Equal(t, "captcha-value", payload["turnstile_token"])
+
+	_, err = sub2APIRatioSyncLoginPayload("not-an-email", "password", nil, "")
+	require.Error(t, err)
+	_, err = sub2APIRatioSyncLoginPayload("admin@example.com", "password", nil, `{"email":"override"}`)
+	require.Error(t, err)
+}
+
+func TestSaveSub2APIRatioSyncAuthResponseHandlesTwoFactorAndTokens(t *testing.T) {
+	state := initialSub2APIRatioSyncState()
+	state.Settings.Enabled = true
+	state.Runtime.NextRun = 123
+
+	twoFactorData, err := common.Marshal(map[string]any{
+		"requires_2fa":      true,
+		"temp_token":        "temporary-login-token",
+		"user_email_masked": "a***@example.com",
+	})
+	require.NoError(t, err)
+	result, err := saveSub2APIRatioSyncAuthResponse(&state, sub2APIRatioSyncAPIResponse{Code: 0, Data: twoFactorData})
+	require.NoError(t, err)
+	assert.True(t, result.Requires2FA)
+	assert.False(t, state.Settings.Enabled)
+	assert.NotNil(t, state.Secrets.PendingLogin)
+	assert.Empty(t, state.Secrets.AccessToken)
+
+	tokenData, err := common.Marshal(map[string]any{
+		"access_token":  "access-token",
+		"refresh_token": "refresh-token",
+		"expires_in":    3600,
+	})
+	require.NoError(t, err)
+	result, err = saveSub2APIRatioSyncAuthResponse(&state, sub2APIRatioSyncAPIResponse{Code: 0, Data: tokenData})
+	require.NoError(t, err)
+	assert.False(t, result.Requires2FA)
+	assert.True(t, result.Refresh)
+	assert.Equal(t, "access-token", state.Secrets.AccessToken)
+	assert.Equal(t, "refresh-token", state.Secrets.RefreshToken)
+	assert.Nil(t, state.Secrets.PendingLogin)
 }
