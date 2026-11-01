@@ -753,6 +753,7 @@
     "Automatically disable channels when tests fail": "Automatically disable channels when tests fail",
     "Automatically probe all channels in the background": "Automatically probe all channels in the background",
     "Automatically replaces upstream callback URLs with the server address.": "Automatically replaces upstream callback URLs with the server address.",
+    "Automatically selects a group that provides the requested model; billing uses that group's rate.": "Automatically selects a group that provides the requested model; billing uses that group's rate.",
     "Automatically selects the best available group with circuit breaker mechanism": "Automatically selects the best available group with circuit breaker mechanism",
     "Automatically sync model list when upstream changes are detected": "Automatically sync model list when upstream changes are detected",
     "Availability (last 24h)": "Availability (last 24h)",

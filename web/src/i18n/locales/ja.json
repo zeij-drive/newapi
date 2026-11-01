@@ -753,6 +753,7 @@
     "Automatically disable channels when tests fail": "テストが失敗したときにチャネルを自動的に無効にする",
     "Automatically probe all channels in the background": "バックグラウンドですべてのチャネルを自動的にプローブする",
     "Automatically replaces upstream callback URLs with the server address.": "アップストリームコールバック URL をサーバーアドレスに自動的に置き換えます。",
+    "Automatically selects a group that provides the requested model; billing uses that group's rate.": "要求されたモデルを提供するグループを自動選択し、そのグループの倍率で課金します。",
     "Automatically selects the best available group with circuit breaker mechanism": "回路ブレーカーメカニズム付きで最適な利用可能なグループを自動的に選択",
     "Automatically sync model list when upstream changes are detected": "アップストリームの変更が検出されたときにモデルリストを自動的に同期",
     "Availability (last 24h)": "可用性（過去 24 時間）",

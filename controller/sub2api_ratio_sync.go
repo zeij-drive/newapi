@@ -20,9 +20,12 @@ package controller
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -54,6 +57,13 @@ const (
 	sub2APIRatioSyncInterval   = 60
 	sub2APIRatioSyncMaxLogs    = 100
 	sub2APIRatioSyncMaxBackups = 20
+
+	sub2APIRatioSyncPairEncryptionVersion = 1
+	sub2APIRatioSyncPairEncryptionAlg     = "A256GCM"
+	sub2APIRatioSyncPairEncryptionAAD     = "starryapi-ratio-sync-pair-v1"
+	sub2APIRatioSyncPairIVLength          = 12
+	sub2APIRatioSyncPairTagLength         = 16
+	sub2APIRatioSyncPairMaxCiphertext     = 2*32768 + 512
 )
 
 var sub2APIRatioSyncMu sync.Mutex
@@ -134,6 +144,13 @@ type sub2APIRatioSyncPair struct {
 	Site      string `json:"site"`
 	ExpiresAt int64  `json:"expires_at"`
 	UsedAt    int64  `json:"used_at"`
+}
+
+type sub2APIRatioSyncEncryptedPayload struct {
+	Version    int    `json:"version"`
+	Algorithm  string `json:"alg"`
+	IV         string `json:"iv"`
+	Ciphertext string `json:"ciphertext"`
 }
 
 type sub2APIRatioSyncPendingLogin struct {
@@ -1354,6 +1371,7 @@ func GetSub2APIRatioSyncBackup(c *gin.Context) {
 }
 
 func CreateSub2APIRatioSyncPair(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	sub2APIRatioSyncMu.Lock()
 	defer sub2APIRatioSyncMu.Unlock()
 	state, err := loadSub2APIRatioSyncState()
@@ -1386,7 +1404,76 @@ func sub2APIRatioSyncPairHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func sub2APIRatioSyncPairKey(pair, site string) []byte {
+	material := make([]byte, 0, len(pair)+1+len(site))
+	material = append(material, pair...)
+	material = append(material, 0)
+	material = append(material, site...)
+	sum := sha256.Sum256(material)
+	return sum[:]
+}
+
+func decodeSub2APIRatioSyncBase64URL(value string, maxLength int) ([]byte, error) {
+	if value == "" || len(value) > maxLength {
+		return nil, errors.New("登录凭据解密失败")
+	}
+	for i := range value {
+		char := value[i]
+		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' {
+			return nil, errors.New("登录凭据解密失败")
+		}
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || len(decoded) == 0 {
+		return nil, errors.New("登录凭据解密失败")
+	}
+	return decoded, nil
+}
+
+func decryptSub2APIRatioSyncPairPayload(pair, site string, encrypted sub2APIRatioSyncEncryptedPayload) (string, string, error) {
+	if encrypted.Version != sub2APIRatioSyncPairEncryptionVersion || encrypted.Algorithm != sub2APIRatioSyncPairEncryptionAlg {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	iv, err := decodeSub2APIRatioSyncBase64URL(encrypted.IV, 64)
+	if err != nil || len(iv) != sub2APIRatioSyncPairIVLength {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	ciphertext, err := decodeSub2APIRatioSyncBase64URL(encrypted.Ciphertext, 4*((sub2APIRatioSyncPairMaxCiphertext+2)/3)+4)
+	if err != nil || len(ciphertext) < sub2APIRatioSyncPairTagLength || len(ciphertext) > sub2APIRatioSyncPairMaxCiphertext {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	block, err := aes.NewCipher(sub2APIRatioSyncPairKey(pair, site))
+	if err != nil {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	plaintext, err := gcm.Open(nil, iv, ciphertext, []byte(sub2APIRatioSyncPairEncryptionAAD))
+	if err != nil || len(plaintext) == 0 || len(plaintext) > sub2APIRatioSyncPairMaxCiphertext {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	var tokens struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := common.Unmarshal(plaintext, &tokens); err != nil {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	access, err := cleanSub2APIToken(tokens.AccessToken)
+	if err != nil || access == "" {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	refresh, err := cleanSub2APIToken(tokens.RefreshToken)
+	if err != nil {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	return access, refresh, nil
+}
+
 func CheckSub2APIRatioSyncPair(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	var request struct {
 		Pair string `json:"pair"`
 	}
@@ -1411,11 +1498,11 @@ func CheckSub2APIRatioSyncPair(c *gin.Context) {
 
 func ReceiveSub2APIRatioSyncPair(c *gin.Context) {
 	var request struct {
-		Pair         string `json:"pair"`
-		Site         string `json:"site"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
+		Pair      string                           `json:"pair"`
+		Site      string                           `json:"site"`
+		Encrypted sub2APIRatioSyncEncryptedPayload `json:"encrypted"`
 	}
+	c.Header("Cache-Control", "no-store")
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		common.ApiError(c, err)
 		return
@@ -1427,16 +1514,6 @@ func ReceiveSub2APIRatioSyncPair(c *gin.Context) {
 	site, err := normalizeSub2APIBaseURL(request.Site)
 	if err != nil {
 		common.ApiError(c, newSub2APIRatioSyncError("登录站点不匹配", http.StatusForbidden, false))
-		return
-	}
-	access, err := cleanSub2APIToken(request.AccessToken)
-	if err != nil || access == "" {
-		common.ApiError(c, newSub2APIRatioSyncError("未取得有效的登录令牌", http.StatusBadRequest, false))
-		return
-	}
-	refresh, err := cleanSub2APIToken(request.RefreshToken)
-	if err != nil {
-		common.ApiError(c, newSub2APIRatioSyncError("上游刷新令牌格式不正确", http.StatusBadRequest, false))
 		return
 	}
 	sub2APIRatioSyncMu.Lock()
@@ -1458,6 +1535,11 @@ func ReceiveSub2APIRatioSyncPair(c *gin.Context) {
 		}
 		if pair.UsedAt > 0 {
 			common.ApiSuccess(c, gin.H{"received": true})
+			return
+		}
+		access, refresh, decryptErr := decryptSub2APIRatioSyncPairPayload(request.Pair, site, request.Encrypted)
+		if decryptErr != nil {
+			common.ApiError(c, newSub2APIRatioSyncError("登录凭据解密失败，请重新发起配对", http.StatusBadRequest, false))
 			return
 		}
 		pair.UsedAt = time.Now().Unix()
@@ -1494,13 +1576,17 @@ func GetSub2APIRatioSyncLoginHelper(c *gin.Context) {
 		common.ApiError(c, errors.New("上游站点地址无效"))
 		return
 	}
-	webHost := c.Request.Host
 	common.OptionMapRWMutex.RLock()
 	serverAddress := common.OptionMap["ServerAddress"]
 	common.OptionMapRWMutex.RUnlock()
 	receiverURL, err := sub2APIRatioSyncReceiverURL(c.Request.Host, c.Request.TLS != nil, serverAddress)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	receiver, err := url.Parse(receiverURL)
+	if err != nil || receiver.Host == "" {
+		common.ApiError(c, errors.New("本站服务地址无效"))
 		return
 	}
 	namespaceHash := sha256.Sum256([]byte(receiverURL))
@@ -1519,8 +1605,8 @@ func GetSub2APIRatioSyncLoginHelper(c *gin.Context) {
 	script := fmt.Sprintf(`// ==UserScript==
 // @name         Sub2API 登录助手
 // @namespace    %s
-// @version      1.0.0
-// @description  仅在倍率同步台发起配对后转交上游会话
+// @version      1.1.0
+// @description  仅在倍率同步台发起配对后加密转交上游会话
 // @match        %s/*
 // @connect      %s
 // @run-at       document-start
@@ -1529,7 +1615,19 @@ func GetSub2APIRatioSyncLoginHelper(c *gin.Context) {
 // @updateURL    none
 // @downloadURL  none
 // ==/UserScript==
-(function(){"use strict";const SITE=%s,RECEIVER=%s,SLOT=%s;if(location.origin!==new URL(SITE).origin)return;const incoming=/^#ratesync_pair=([a-f0-9]{128})$/.exec(location.hash);if(incoming){sessionStorage.setItem(SLOT,JSON.stringify({pair:incoming[1],until:Date.now()+600000}));history.replaceState(null,"",location.pathname+location.search);}let busy=false,stopped=false;const timer=setInterval(()=>{if(busy||stopped)return;let pair;try{pair=JSON.parse(sessionStorage.getItem(SLOT)||"null")}catch{return}if(!pair||!/^[a-f0-9]{128}$/.test(pair.pair))return;if(Date.now()>pair.until){sessionStorage.removeItem(SLOT);clearInterval(timer);return}const access=localStorage.getItem("auth_token");if(!access)return;const expiry=Number(localStorage.getItem("token_expires_at"));if(expiry&&expiry<=Date.now()+30000)return;busy=true;GM_xmlhttpRequest({method:"POST",url:RECEIVER,anonymous:true,timeout:20000,headers:{"Content-Type":"application/json"},data:JSON.stringify({pair:pair.pair,site:SITE,access_token:access,refresh_token:localStorage.getItem("refresh_token")||""}),onload(response){busy=false;let body;try{body=JSON.parse(response.responseText)}catch{return}if(response.status===200&&body.success){stopped=true;sessionStorage.removeItem(SLOT);clearInterval(timer);window.close();if(!window.closed)alert("会话已交给倍率同步台，请关闭此页并返回管理页面。")}else if(response.status>=400&&response.status<500){stopped=true;sessionStorage.removeItem(SLOT);clearInterval(timer);alert("登录配对无效或已过期，请重新发起。")}},onerror(){busy=false},ontimeout(){busy=false}})},1500)})();`, namespace, origin, webHost, string(siteJSON), string(receiverJSON), namespace)
+(function(){
+"use strict";
+const SITE=%s,RECEIVER=%s,SLOT=%s,AAD="starryapi-ratio-sync-pair-v1",encoder=new TextEncoder();
+if(location.origin!==new URL(SITE).origin)return;
+const incoming=/^#ratesync_pair=([a-f0-9]{128})$/.exec(location.hash);
+if(incoming){sessionStorage.setItem(SLOT,JSON.stringify({pair:incoming[1],until:Date.now()+600000}));history.replaceState(null,"",location.pathname+location.search);}
+let busy=false,stopped=false;
+function base64url(value){const bytes=new Uint8Array(value),chunks=[];for(let i=0;i<bytes.length;i+=8192){let chunk="";for(let j=i;j<Math.min(i+8192,bytes.length);j++)chunk+=String.fromCharCode(bytes[j]);chunks.push(chunk);}return btoa(chunks.join("")).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+async function encryptSession(pair,access,refresh){const pairBytes=encoder.encode(pair),siteBytes=encoder.encode(SITE),material=new Uint8Array(pairBytes.length+1+siteBytes.length);material.set(pairBytes,0);material[pairBytes.length]=0;material.set(siteBytes,pairBytes.length+1);const digest=await crypto.subtle.digest("SHA-256",material),key=await crypto.subtle.importKey("raw",digest,{name:"AES-GCM"},false,["encrypt"]),iv=crypto.getRandomValues(new Uint8Array(12)),plaintext=encoder.encode(JSON.stringify({access_token:access,refresh_token:refresh})),ciphertext=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:encoder.encode(AAD),tagLength:128},key,plaintext);return{version:1,alg:"A256GCM",iv:base64url(iv),ciphertext:base64url(ciphertext)};}
+function stopWithMessage(message){stopped=true;sessionStorage.removeItem(SLOT);clearInterval(timer);alert(message);}
+async function sendSession(pair,access,refresh){try{const encrypted=await encryptSession(pair,access,refresh);GM_xmlhttpRequest({method:"POST",url:RECEIVER,anonymous:true,timeout:20000,headers:{"Content-Type":"application/json"},data:JSON.stringify({pair:pair,site:SITE,encrypted:encrypted}),onload(response){busy=false;let body;try{body=JSON.parse(response.responseText);}catch{return}if(response.status===200&&body.success){stopWithMessage("会话已交给倍率同步台，请关闭此页并返回管理页面。");window.close();}else if(response.status>=400&&response.status<500){stopWithMessage("登录配对无效或已过期，请重新发起。");}},onerror(){busy=false;},ontimeout(){busy=false;}});}catch{busy=false;}}
+const timer=setInterval(()=>{if(busy||stopped)return;let pair;try{pair=JSON.parse(sessionStorage.getItem(SLOT)||"null");}catch{return}if(!pair||!/^[a-f0-9]{128}$/.test(pair.pair))return;if(Date.now()>pair.until){sessionStorage.removeItem(SLOT);clearInterval(timer);return}const access=localStorage.getItem("auth_token")||localStorage.getItem("access_token")||localStorage.getItem("token");if(!access)return;const refresh=localStorage.getItem("refresh_token")||localStorage.getItem("rf_token")||"",rawExpiry=Number(localStorage.getItem("token_expires_at")),expiry=rawExpiry>0&&rawExpiry<100000000000?rawExpiry*1000:rawExpiry;if(expiry&&expiry<=Date.now()+30000)return;busy=true;void sendSession(pair.pair,access,refresh);},1500);
+})();`, namespace, origin, receiver.Host, string(siteJSON), string(receiverJSON), namespace)
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(script))

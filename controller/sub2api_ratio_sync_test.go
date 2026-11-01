@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"math"
 	"os"
 	"path/filepath"
@@ -306,6 +309,57 @@ func TestPublicSub2APIRatioSyncStateDoesNotExposeSessionTokens(t *testing.T) {
 	assert.NotContains(t, string(encoded), state.Secrets.AccessToken)
 	assert.NotContains(t, string(encoded), state.Secrets.RefreshToken)
 	assert.NotContains(t, string(encoded), state.Secrets.PendingLogin.TempToken)
+}
+
+func TestDecryptSub2APIRatioSyncPairPayload(t *testing.T) {
+	pair := strings.Repeat("ab", 64)
+	site := "https://sub2api.example"
+	plaintext, err := common.Marshal(map[string]string{
+		"access_token":  "access-token-from-browser",
+		"refresh_token": "refresh-token-from-browser",
+	})
+	require.NoError(t, err)
+	block, err := aes.NewCipher(sub2APIRatioSyncPairKey(pair, site))
+	require.NoError(t, err)
+	gcm, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	iv := make([]byte, sub2APIRatioSyncPairIVLength)
+	for i := range iv {
+		iv[i] = byte(i + 1)
+	}
+	ciphertext := gcm.Seal(nil, iv, plaintext, []byte(sub2APIRatioSyncPairEncryptionAAD))
+	payload := sub2APIRatioSyncEncryptedPayload{
+		Version:    sub2APIRatioSyncPairEncryptionVersion,
+		Algorithm:  sub2APIRatioSyncPairEncryptionAlg,
+		IV:         base64.RawURLEncoding.EncodeToString(iv),
+		Ciphertext: base64.RawURLEncoding.EncodeToString(ciphertext),
+	}
+
+	access, refresh, err := decryptSub2APIRatioSyncPairPayload(pair, site, payload)
+	require.NoError(t, err)
+	assert.Equal(t, "access-token-from-browser", access)
+	assert.Equal(t, "refresh-token-from-browser", refresh)
+
+	_, _, err = decryptSub2APIRatioSyncPairPayload(strings.Repeat("cd", 64), site, payload)
+	require.Error(t, err)
+	_, _, err = decryptSub2APIRatioSyncPairPayload(pair, "https://other.example", payload)
+	require.Error(t, err)
+
+	tampered := payload
+	tamperedCiphertext, err := base64.RawURLEncoding.DecodeString(tampered.Ciphertext)
+	require.NoError(t, err)
+	tamperedCiphertext[len(tamperedCiphertext)-1] ^= 1
+	tampered.Ciphertext = base64.RawURLEncoding.EncodeToString(tamperedCiphertext)
+	_, _, err = decryptSub2APIRatioSyncPairPayload(pair, site, tampered)
+	require.Error(t, err)
+
+	emptyAccess, err := common.Marshal(map[string]string{"access_token": "", "refresh_token": "refresh"})
+	require.NoError(t, err)
+	emptyCiphertext := gcm.Seal(nil, iv, emptyAccess, []byte(sub2APIRatioSyncPairEncryptionAAD))
+	emptyPayload := payload
+	emptyPayload.Ciphertext = base64.RawURLEncoding.EncodeToString(emptyCiphertext)
+	_, _, err = decryptSub2APIRatioSyncPairPayload(pair, site, emptyPayload)
+	require.Error(t, err)
 }
 
 func TestSub2APIRatioSyncLoginPayloadValidatesCredentialsAndFlattensCaptcha(t *testing.T) {

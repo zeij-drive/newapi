@@ -753,6 +753,7 @@
     "Automatically disable channels when tests fail": "Désactiver automatiquement les canaux lorsque les tests échouent",
     "Automatically probe all channels in the background": "Sonder automatiquement tous les canaux en arrière-plan",
     "Automatically replaces upstream callback URLs with the server address.": "Remplace automatiquement les URL des callbacks en amont par l'adresse du serveur.",
+    "Automatically selects a group that provides the requested model; billing uses that group's rate.": "Sélectionne automatiquement un groupe proposant le modèle demandé ; la facturation utilise le tarif de ce groupe.",
     "Automatically selects the best available group with circuit breaker mechanism": "Sélectionne automatiquement le meilleur groupe disponible avec un mécanisme de disjoncteur de circuit",
     "Automatically sync model list when upstream changes are detected": "Synchroniser automatiquement la liste des modèles lorsque des changements en amont sont détectés",
     "Availability (last 24h)": "Disponibilité (dernières 24 h)",

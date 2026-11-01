@@ -490,7 +490,7 @@ export function ApiKeysMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t(
-                          'Set the group field in an API request to use an additional group; otherwise, the default group is used.'
+                          "Automatically selects a group that provides the requested model; billing uses that group's rate."
                         )}
                       </FormDescription>
                       <FormMessage />

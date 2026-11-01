@@ -686,6 +686,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	var allowedGroupAutoOrder []string
 	if token.Group != "auto" && token.AllowedGroups != "" {
 		allowedGroups, err := token.GetAllowedGroups()
 		if err != nil {
@@ -693,7 +694,10 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		} else if len(allowedGroups) > 0 {
 			allGroups := make([]string, 0, len(allowedGroups)+1)
 			seen := make(map[string]struct{}, len(allowedGroups)+1)
-			defaultGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+			defaultGroup := token.Group
+			if defaultGroup == "" {
+				defaultGroup = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+			}
 			if defaultGroup != "" && defaultGroup != "auto" {
 				seen[defaultGroup] = struct{}{}
 				allGroups = append(allGroups, defaultGroup)
@@ -709,6 +713,13 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 				allGroups = append(allGroups, group)
 			}
 			common.SetContextKey(c, constant.ContextKeyTokenAllowedGroups, allGroups)
+			if len(allGroups) > 1 {
+				// A token with a primary group and additional allowed groups is an
+				// automatic multi-group token. The first group remains the preferred
+				// billing route, while model availability can select another group
+				// without requiring the client to send a group field.
+				allowedGroupAutoOrder = allGroups
+			}
 		}
 	}
 	if token.AutoGroups != "" {
@@ -720,6 +731,11 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		} else if len(autoGroups) > 0 {
 			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
 		}
+	}
+	if len(allowedGroupAutoOrder) > 1 {
+		common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, allowedGroupAutoOrder)
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "auto")
 	}
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {

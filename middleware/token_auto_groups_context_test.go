@@ -63,6 +63,29 @@ func TestSetupContextForTokenIncludesDefaultAndAdditionalGroups(t *testing.T) {
 	assert.Equal(t, []string{"default", "vip"}, value)
 }
 
+func TestSetupContextForTokenAutomaticallyRoutesAcrossAllowedGroups(t *testing.T) {
+	ctx := newTokenAutoGroupsContext()
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+	token := &model.Token{
+		Id:            1,
+		UserId:        2,
+		Group:         "default",
+		AllowedGroups: `["vip","premium"]`,
+	}
+
+	require.NoError(t, SetupContextForToken(ctx, token))
+	assert.Equal(t, "auto", common.GetContextKeyString(ctx, constant.ContextKeyTokenGroup))
+	assert.Equal(t, "auto", common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
+
+	allowed, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAllowedGroups)
+	require.True(t, ok)
+	assert.Equal(t, []string{"default", "vip", "premium"}, allowed)
+	autoGroups, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAutoGroups)
+	require.True(t, ok)
+	assert.Equal(t, []string{"default", "vip", "premium"}, autoGroups)
+}
+
 func TestSetupContextForTokenMalformedAllowedGroupsFailsClosed(t *testing.T) {
 	ctx := newTokenAutoGroupsContext()
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
