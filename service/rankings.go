@@ -104,15 +104,15 @@ type VendorShareSeries struct {
 
 type rankingPeriodConfig struct {
 	id          string
-	duration    time.Duration
 	bucketSize  int64
 	labelLayout string
 	hasPrevious bool
 }
 
 type rankingCacheItem struct {
-	expiresAt time.Time
-	data      *RankingsResponse
+	expiresAt   time.Time
+	periodStart int64
+	data        *RankingsResponse
 }
 
 type rankingModelMeta struct {
@@ -142,22 +142,28 @@ func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
 	}
 
 	now := time.Now()
+	startTime, endTime, err := rankingTimeRange(config, now)
+	if err != nil {
+		return nil, err
+	}
+
 	rankingCacheMu.Lock()
-	if item, ok := rankingCache[config.id]; ok && now.Before(item.expiresAt) {
+	if item, ok := rankingCache[config.id]; ok && item.periodStart == startTime && now.Before(item.expiresAt) {
 		rankingCacheMu.Unlock()
 		return item.data, nil
 	}
 	rankingCacheMu.Unlock()
 
-	data, err := buildRankingsSnapshot(config, now)
+	data, err := buildRankingsSnapshot(config, startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
 
 	rankingCacheMu.Lock()
 	rankingCache[config.id] = rankingCacheItem{
-		expiresAt: now.Add(rankingCacheTTL),
-		data:      data,
+		expiresAt:   now.Add(rankingCacheTTL),
+		periodStart: startTime,
+		data:        data,
 	}
 	rankingCacheMu.Unlock()
 
@@ -167,20 +173,19 @@ func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
 func rankingConfig(period string) (rankingPeriodConfig, error) {
 	switch period {
 	case "", "week":
-		return rankingPeriodConfig{id: "week", duration: 7 * 24 * time.Hour, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
+		return rankingPeriodConfig{id: "week", bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
 	case "today":
-		return rankingPeriodConfig{id: "today", duration: 24 * time.Hour, bucketSize: 3600, labelLayout: "15:04", hasPrevious: true}, nil
+		return rankingPeriodConfig{id: "today", bucketSize: 3600, labelLayout: "15:04", hasPrevious: true}, nil
 	case "month":
-		return rankingPeriodConfig{id: "month", duration: 30 * 24 * time.Hour, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
+		return rankingPeriodConfig{id: "month", bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
 	case "year":
-		return rankingPeriodConfig{id: "year", duration: 365 * 24 * time.Hour, bucketSize: 7 * 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
+		return rankingPeriodConfig{id: "year", bucketSize: 7 * 24 * 3600, labelLayout: "Jan 2", hasPrevious: true}, nil
 	default:
 		return rankingPeriodConfig{}, fmt.Errorf("invalid ranking period: %s", period)
 	}
 }
 
-func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*RankingsResponse, error) {
-	startTime, endTime := rankingTimeRange(config, now)
+func buildRankingsSnapshot(config rankingPeriodConfig, startTime int64, endTime int64) (*RankingsResponse, error) {
 	currentTotals, err := model.GetRankingQuotaTotals(startTime, endTime)
 	if err != nil {
 		return nil, err
@@ -192,7 +197,10 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 
 	var previousTotals []model.RankingQuotaTotal
 	if config.hasPrevious {
-		previousStart, previousEnd := previousRankingTimeRange(config, startTime)
+		previousStart, previousEnd, err := previousRankingTimeRange(config, startTime)
+		if err != nil {
+			return nil, err
+		}
 		previousTotals, err = model.GetRankingQuotaTotals(previousStart, previousEnd)
 		if err != nil {
 			return nil, err
@@ -220,18 +228,20 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	}, nil
 }
 
-func rankingTimeRange(config rankingPeriodConfig, now time.Time) (int64, int64) {
-	endTime := now.Unix()
-	if config.duration <= 0 {
-		return 0, endTime
+func rankingTimeRange(config rankingPeriodConfig, now time.Time) (int64, int64, error) {
+	start, end, err := usageRankingBounds(config.id, now)
+	if err != nil {
+		return 0, 0, err
 	}
-	return now.Add(-config.duration).Unix(), endTime
+	return start.Unix(), end.Unix() - 1, nil
 }
 
-func previousRankingTimeRange(config rankingPeriodConfig, currentStart int64) (int64, int64) {
-	previousEnd := currentStart - 1
-	previousStart := time.Unix(currentStart, 0).Add(-config.duration).Unix()
-	return previousStart, previousEnd
+func previousRankingTimeRange(config rankingPeriodConfig, currentStart int64) (int64, int64, error) {
+	previousStart, previousEnd, err := usageRankingBounds(config.id, time.Unix(currentStart, 0).Add(-time.Second))
+	if err != nil {
+		return 0, 0, err
+	}
+	return previousStart.Unix(), previousEnd.Unix() - 1, nil
 }
 
 func buildRankingModelMeta() map[string]rankingModelMeta {

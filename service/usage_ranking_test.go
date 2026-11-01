@@ -45,6 +45,61 @@ func TestUsageRankingBounds(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRankingTimeRangeUsesCalendarPeriods(t *testing.T) {
+	at := rankingTime(2026, time.January, 25, 13)
+	for _, tc := range []struct {
+		period        string
+		start         time.Time
+		endExclusive  time.Time
+		previousStart time.Time
+		previousEndEx time.Time
+	}{
+		{
+			period:        "today",
+			start:         rankingTime(2026, time.January, 25, 0),
+			endExclusive:  rankingTime(2026, time.January, 26, 0),
+			previousStart: rankingTime(2026, time.January, 24, 0),
+			previousEndEx: rankingTime(2026, time.January, 25, 0),
+		},
+		{
+			period:        "week",
+			start:         rankingTime(2026, time.January, 19, 0),
+			endExclusive:  rankingTime(2026, time.January, 26, 0),
+			previousStart: rankingTime(2026, time.January, 12, 0),
+			previousEndEx: rankingTime(2026, time.January, 19, 0),
+		},
+		{
+			period:        "month",
+			start:         rankingTime(2026, time.January, 1, 0),
+			endExclusive:  rankingTime(2026, time.February, 1, 0),
+			previousStart: rankingTime(2025, time.December, 1, 0),
+			previousEndEx: rankingTime(2026, time.January, 1, 0),
+		},
+		{
+			period:        "year",
+			start:         rankingTime(2026, time.January, 1, 0),
+			endExclusive:  rankingTime(2027, time.January, 1, 0),
+			previousStart: rankingTime(2025, time.January, 1, 0),
+			previousEndEx: rankingTime(2026, time.January, 1, 0),
+		},
+	} {
+		t.Run(tc.period, func(t *testing.T) {
+			config, err := rankingConfig(tc.period)
+			require.NoError(t, err)
+
+			start, end, err := rankingTimeRange(config, at)
+			require.NoError(t, err)
+			assert.Equal(t, tc.start.Unix(), start)
+			assert.Equal(t, tc.endExclusive.Unix()-1, end)
+
+			previousStart, previousEnd, err := previousRankingTimeRange(config, start)
+			require.NoError(t, err)
+			assert.Equal(t, tc.previousStart.Unix(), previousStart)
+			assert.Equal(t, tc.previousEndEx.Unix()-1, previousEnd)
+		})
+	}
+}
+
 func TestFirstUsageRankingRewardWindowStartsAtActivationDay(t *testing.T) {
 	setting := operation_setting.UsageRankingRewards{
 		Enabled:   true,

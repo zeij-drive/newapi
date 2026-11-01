@@ -57,6 +57,12 @@ const mappingListSchema = z
       mappings.length
   )
 
+const calculationModeLabelKeys = {
+  effective: 'Effective ratio',
+  default: 'Default ratio',
+  fixed: 'Fixed ratio',
+} as const
+
 type MappingEditorProps = {
   groups: Sub2APIRatioSyncGroup[]
   targets: Record<string, number>
@@ -122,7 +128,7 @@ export function MappingEditor(props: MappingEditorProps) {
       {
         source_id: firstGroup.id,
         target: firstTarget,
-        mode: 'effective',
+        mode: 'default',
         value: 1,
         enabled: true,
         allow_peak: false,
@@ -195,7 +201,11 @@ export function MappingEditor(props: MappingEditorProps) {
                       id={`sync-source-${index}`}
                       className='w-full'
                     >
-                      <SelectValue />
+                      <SelectValue>
+                        {group
+                          ? `${group.name} · ${formatRatio(group.effective)}`
+                          : `${t('Missing group')} #${mapping.source_id}`}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {!group ? (
@@ -261,7 +271,9 @@ export function MappingEditor(props: MappingEditorProps) {
                         id={`sync-mode-${index}`}
                         className='w-full'
                       >
-                        <SelectValue />
+                        <SelectValue>
+                          {t(calculationModeLabelKeys[mapping.mode])}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value='effective'>

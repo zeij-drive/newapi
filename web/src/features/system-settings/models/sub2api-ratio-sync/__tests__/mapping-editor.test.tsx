@@ -46,8 +46,52 @@ const mapping: Sub2APIRatioSyncMapping = {
   enabled: true,
   allow_peak: false,
 }
+const defaultRatioMapping: Sub2APIRatioSyncMapping = {
+  ...mapping,
+  mode: 'default',
+}
 
 describe('Sub2API group mapping editor', () => {
+  it('shows the source group name and translated calculation label', () => {
+    render(
+      <MappingEditor
+        groups={groups}
+        targets={{ default: 1 }}
+        savedMappings={[defaultRatioMapping]}
+        busy={false}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onRefreshGroups={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('combobox', { name: 'Source group' })
+    ).toHaveTextContent('Standard')
+    expect(
+      screen.getByRole('combobox', { name: 'Calculation' })
+    ).toHaveTextContent('Default ratio')
+  })
+
+  it('adds mappings with the default ratio calculation selected', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingEditor
+        groups={groups}
+        targets={{ default: 1, premium: 2 }}
+        savedMappings={[mapping]}
+        busy={false}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onRefreshGroups={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Add mapping' }))
+
+    expect(
+      screen.getAllByRole('combobox', { name: 'Calculation' })[1]
+    ).toHaveTextContent('Default ratio')
+  })
+
   it('blocks saving when a new mapping duplicates a target group', async () => {
     const user = userEvent.setup()
     const onSave = vi.fn().mockResolvedValue(undefined)
