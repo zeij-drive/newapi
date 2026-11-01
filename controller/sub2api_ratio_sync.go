@@ -1604,6 +1604,11 @@ func GetSub2APIRatioSyncLoginHelper(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	namespaceJSON, err := common.Marshal(namespace)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	origin := upstream.Scheme + "://" + upstream.Host
 	script := fmt.Sprintf(`// ==UserScript==
 // @name         StarryAPI 倍率同步登录助手
@@ -1643,7 +1648,7 @@ async function encryptSession(pair,access,refresh){const pairBytes=encoder.encod
 function stopWithMessage(message){stopped=true;clearPair();if(timer!==undefined)clearInterval(timer);alert(message);}
 async function sendSession(pair,access,refresh){try{const encrypted=await encryptSession(pair,access,refresh);GM_xmlhttpRequest({method:"POST",url:RECEIVER,anonymous:true,timeout:20000,headers:{"Content-Type":"application/json"},data:JSON.stringify({pair:pair,site:SITE,encrypted:encrypted}),onload(response){busy=false;let body;try{body=JSON.parse(response.responseText);}catch{return}if(response.status===200&&body.success){stopWithMessage("会话已交给倍率同步台，请关闭此页并返回管理页面。");window.close();}else if(response.status>=400&&response.status<500){stopWithMessage("登录配对无效或已过期，请重新发起。");}},onerror(){busy=false;},ontimeout(){busy=false;}});}catch{busy=false;}}
 timer=setInterval(()=>{if(busy||stopped)return;capturePair();const pair=readPair();if(!pair)return;const access=readToken(["auth_token","access_token","token","accessToken","authToken"],["access_token","accessToken","token","value"])||readCookie(["auth_token","access_token","token"]);const refresh=readToken(["refresh_token","rf_token","refreshToken"],["refresh_token","refreshToken","rf_token","token","value"])||readCookie(["refresh_token","rf_token","refreshToken"]);if(!access&&!refresh)return;busy=true;void sendSession(pair.pair,access,refresh);},1500);
-})();`, namespace, origin, receiver.Hostname(), string(siteJSON), string(receiverJSON), namespace)
+})();`, namespace, origin, receiver.Hostname(), string(siteJSON), string(receiverJSON), string(namespaceJSON))
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(script))

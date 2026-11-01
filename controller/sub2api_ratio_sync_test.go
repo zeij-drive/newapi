@@ -3,8 +3,11 @@ package controller
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/tls"
 	"encoding/base64"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -125,6 +129,60 @@ func TestNormalizeSub2APIBaseURLRequiresTLSOutsideLoopback(t *testing.T) {
 			assert.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestGetSub2APIRatioSyncLoginHelperQuotesSlotName(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{TablePrefix: "ratio_sync_helper_test_"},
+	})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	oldDB, oldCryptoSecret, oldConfigSecret := model.DB, common.CryptoSecret, common.ConfigEncryptionSecret
+	model.DB = db
+	common.CryptoSecret = "ratio-sync-helper-test-crypto-secret"
+	common.ConfigEncryptionSecret = "ratio-sync-helper-test-config-secret"
+	common.OptionMapRWMutex.Lock()
+	oldOptionMap := common.OptionMap
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	oldServerAddress, hadServerAddress := common.OptionMap["ServerAddress"]
+	common.OptionMap["ServerAddress"] = ""
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		if oldOptionMap == nil {
+			common.OptionMap = nil
+		} else {
+			if hadServerAddress {
+				common.OptionMap["ServerAddress"] = oldServerAddress
+			} else {
+				delete(common.OptionMap, "ServerAddress")
+			}
+		}
+		common.OptionMapRWMutex.Unlock()
+		model.DB, common.CryptoSecret, common.ConfigEncryptionSecret = oldDB, oldCryptoSecret, oldConfigSecret
+		require.NoError(t, sqlDB.Close())
+	})
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	state := initialSub2APIRatioSyncState()
+	state.Settings.UpstreamURL = "https://www.f-api.site"
+	require.NoError(t, saveSub2APIRatioSyncState(state))
+
+	previousGinMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(previousGinMode) })
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/option/sub2api-ratio-sync/pair/login-helper", nil)
+	context.Request.Host = "newapi.example"
+	context.Request.TLS = &tls.ConnectionState{}
+	GetSub2APIRatioSyncLoginHelper(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Regexp(t, `SLOT="sub2api-ratio-sync-[a-f0-9]+"`, recorder.Body.String())
+	assert.NotContains(t, recorder.Body.String(), "SLOT=sub2api-ratio-sync-")
 }
 
 func TestSub2APIRatioSyncReceiverURLRequiresTLSOutsideLoopback(t *testing.T) {
