@@ -1462,11 +1462,14 @@ func decryptSub2APIRatioSyncPairPayload(pair, site string, encrypted sub2APIRati
 		return "", "", errors.New("登录凭据解密失败")
 	}
 	access, err := cleanSub2APIToken(tokens.AccessToken)
-	if err != nil || access == "" {
+	if err != nil {
 		return "", "", errors.New("登录凭据解密失败")
 	}
 	refresh, err := cleanSub2APIToken(tokens.RefreshToken)
 	if err != nil {
+		return "", "", errors.New("登录凭据解密失败")
+	}
+	if access == "" && refresh == "" {
 		return "", "", errors.New("登录凭据解密失败")
 	}
 	return access, refresh, nil
@@ -1603,31 +1606,44 @@ func GetSub2APIRatioSyncLoginHelper(c *gin.Context) {
 	}
 	origin := upstream.Scheme + "://" + upstream.Host
 	script := fmt.Sprintf(`// ==UserScript==
-// @name         Sub2API 登录助手
+// @name         StarryAPI 倍率同步登录助手
 // @namespace    %s
-// @version      1.1.0
+// @version      1.3.0
 // @description  仅在倍率同步台发起配对后加密转交上游会话
 // @match        %s/*
 // @connect      %s
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @noframes
 // @updateURL    none
 // @downloadURL  none
 // ==/UserScript==
 (function(){
 "use strict";
-const SITE=%s,RECEIVER=%s,SLOT=%s,AAD="starryapi-ratio-sync-pair-v1",encoder=new TextEncoder();
-if(location.origin!==new URL(SITE).origin)return;
-const incoming=/^#ratesync_pair=([a-f0-9]{128})$/.exec(location.hash);
-if(incoming){sessionStorage.setItem(SLOT,JSON.stringify({pair:incoming[1],until:Date.now()+600000}));history.replaceState(null,"",location.pathname+location.search);}
-let busy=false,stopped=false;
+const SITE=%s,RECEIVER=%s,SLOT=%s,AAD="starryapi-ratio-sync-pair-v1",PAIR_SLOT=SLOT+"-pair",encoder=new TextEncoder();
+const siteURL=new URL(SITE),allowedOrigins=new Set([siteURL.origin]);
+if(siteURL.hostname.toLowerCase()==="www.f-api.site")allowedOrigins.add("https://f-api.site");
+if(siteURL.hostname.toLowerCase()==="f-api.site")allowedOrigins.add("https://www.f-api.site");
+if(!allowedOrigins.has(location.origin))return;
+const pageWindow=typeof unsafeWindow!=="undefined"&&unsafeWindow?unsafeWindow:window;
+let busy=false,stopped=false,timer;
+function validPair(value){return typeof value==="string"&&/^[a-f0-9]{128}$/.test(value);}
+function storePair(pair){const record=JSON.stringify({pair:pair,until:Date.now()+600000});try{sessionStorage.setItem(SLOT,record);localStorage.setItem(PAIR_SLOT,record);}catch{try{sessionStorage.setItem(SLOT,record);}catch{}}}
+function clearPair(){try{sessionStorage.removeItem(SLOT);localStorage.removeItem(PAIR_SLOT);}catch{}}
+function capturePair(){let pair=null;try{const current=new URL(location.href),hash=current.hash.startsWith("#")?current.hash.slice(1):current.hash,hashParams=new URLSearchParams(hash),hashQuery=hash.includes("?")?new URLSearchParams(hash.slice(hash.indexOf("?")+1)):null;pair=current.searchParams.get("ratesync_pair")||hashParams.get("ratesync_pair")||hashQuery?.get("ratesync_pair");if(!validPair(pair))return;storePair(pair);current.searchParams.delete("ratesync_pair");hashParams.delete("ratesync_pair");if(hashQuery)hashQuery.delete("ratesync_pair");current.hash=hashQuery?hash.slice(0,hash.indexOf("?"))+"?"+hashQuery.toString():hashParams.toString();history.replaceState(null,"",current.pathname+current.search+current.hash);}catch{}}
+function readPair(){let raw=null;try{raw=sessionStorage.getItem(SLOT)||localStorage.getItem(PAIR_SLOT);}catch{}if(!raw)return null;try{const pair=JSON.parse(raw);if(!pair||!validPair(pair.pair))return null;if(Date.now()>Number(pair.until)){clearPair();return null}return pair;}catch{return null}}
+capturePair();
+window.addEventListener("hashchange",capturePair);window.addEventListener("popstate",capturePair);
 function base64url(value){const bytes=new Uint8Array(value),chunks=[];for(let i=0;i<bytes.length;i+=8192){let chunk="";for(let j=i;j<Math.min(i+8192,bytes.length);j++)chunk+=String.fromCharCode(bytes[j]);chunks.push(chunk);}return btoa(chunks.join("")).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+function readStorage(storage,key){try{const value=storage?.getItem(key);return typeof value==="string"?value.trim():"";}catch{return ""}}
+function readToken(keys,fields){const stores=[];try{stores.push(pageWindow.localStorage,pageWindow.sessionStorage);}catch{}try{stores.push(localStorage,sessionStorage);}catch{}for(const key of keys){for(const storage of stores){let value=readStorage(storage,key);if(!value)continue;try{if(value[0]==="{"&&value[value.length-1]=== "}"){const parsed=JSON.parse(value);for(const field of fields){if(typeof parsed?.[field]==="string"&&parsed[field].trim())return parsed[field].trim();}continue;}}catch{}return value;}}return "";}
+function readCookie(keys){try{const cookies=document.cookie.split(";");for(const item of cookies){const separator=item.indexOf("=");if(separator<0)continue;const key=item.slice(0,separator).trim();if(!keys.includes(key))continue;const value=decodeURIComponent(item.slice(separator+1).trim());if(value)return value;}}catch{}return "";}
 async function encryptSession(pair,access,refresh){const pairBytes=encoder.encode(pair),siteBytes=encoder.encode(SITE),material=new Uint8Array(pairBytes.length+1+siteBytes.length);material.set(pairBytes,0);material[pairBytes.length]=0;material.set(siteBytes,pairBytes.length+1);const digest=await crypto.subtle.digest("SHA-256",material),key=await crypto.subtle.importKey("raw",digest,{name:"AES-GCM"},false,["encrypt"]),iv=crypto.getRandomValues(new Uint8Array(12)),plaintext=encoder.encode(JSON.stringify({access_token:access,refresh_token:refresh})),ciphertext=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:encoder.encode(AAD),tagLength:128},key,plaintext);return{version:1,alg:"A256GCM",iv:base64url(iv),ciphertext:base64url(ciphertext)};}
-function stopWithMessage(message){stopped=true;sessionStorage.removeItem(SLOT);clearInterval(timer);alert(message);}
+function stopWithMessage(message){stopped=true;clearPair();if(timer!==undefined)clearInterval(timer);alert(message);}
 async function sendSession(pair,access,refresh){try{const encrypted=await encryptSession(pair,access,refresh);GM_xmlhttpRequest({method:"POST",url:RECEIVER,anonymous:true,timeout:20000,headers:{"Content-Type":"application/json"},data:JSON.stringify({pair:pair,site:SITE,encrypted:encrypted}),onload(response){busy=false;let body;try{body=JSON.parse(response.responseText);}catch{return}if(response.status===200&&body.success){stopWithMessage("会话已交给倍率同步台，请关闭此页并返回管理页面。");window.close();}else if(response.status>=400&&response.status<500){stopWithMessage("登录配对无效或已过期，请重新发起。");}},onerror(){busy=false;},ontimeout(){busy=false;}});}catch{busy=false;}}
-const timer=setInterval(()=>{if(busy||stopped)return;let pair;try{pair=JSON.parse(sessionStorage.getItem(SLOT)||"null");}catch{return}if(!pair||!/^[a-f0-9]{128}$/.test(pair.pair))return;if(Date.now()>pair.until){sessionStorage.removeItem(SLOT);clearInterval(timer);return}const access=localStorage.getItem("auth_token")||localStorage.getItem("access_token")||localStorage.getItem("token");if(!access)return;const refresh=localStorage.getItem("refresh_token")||localStorage.getItem("rf_token")||"",rawExpiry=Number(localStorage.getItem("token_expires_at")),expiry=rawExpiry>0&&rawExpiry<100000000000?rawExpiry*1000:rawExpiry;if(expiry&&expiry<=Date.now()+30000)return;busy=true;void sendSession(pair.pair,access,refresh);},1500);
-})();`, namespace, origin, receiver.Host, string(siteJSON), string(receiverJSON), namespace)
+timer=setInterval(()=>{if(busy||stopped)return;capturePair();const pair=readPair();if(!pair)return;const access=readToken(["auth_token","access_token","token","accessToken","authToken"],["access_token","accessToken","token","value"])||readCookie(["auth_token","access_token","token"]);const refresh=readToken(["refresh_token","rf_token","refreshToken"],["refresh_token","refreshToken","rf_token","token","value"])||readCookie(["refresh_token","rf_token","refreshToken"]);if(!access&&!refresh)return;busy=true;void sendSession(pair.pair,access,refresh);},1500);
+})();`, namespace, origin, receiver.Hostname(), string(siteJSON), string(receiverJSON), namespace)
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(script))

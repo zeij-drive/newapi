@@ -108,6 +108,8 @@ func TestNormalizeSub2APIBaseURLRequiresTLSOutsideLoopback(t *testing.T) {
 		{name: "allows localhost for development", input: "http://localhost:3000", want: "http://localhost:3000"},
 		{name: "allows IPv4 loopback for development", input: "http://127.0.0.1:3000", want: "http://127.0.0.1:3000"},
 		{name: "allows IPv6 loopback for development", input: "http://[::1]:3000", want: "http://[::1]:3000"},
+		{name: "normalizes the F-API apex domain to its final HTTPS host", input: "https://f-api.site/", want: "https://www.f-api.site"},
+		{name: "keeps the F-API final HTTPS host", input: "https://www.f-api.site", want: "https://www.f-api.site"},
 		{name: "rejects remote HTTP", input: "http://sub2api.example", wantErr: true},
 		{name: "rejects private-network HTTP", input: "http://10.0.0.8", wantErr: true},
 	}
@@ -358,8 +360,10 @@ func TestDecryptSub2APIRatioSyncPairPayload(t *testing.T) {
 	emptyCiphertext := gcm.Seal(nil, iv, emptyAccess, []byte(sub2APIRatioSyncPairEncryptionAAD))
 	emptyPayload := payload
 	emptyPayload.Ciphertext = base64.RawURLEncoding.EncodeToString(emptyCiphertext)
-	_, _, err = decryptSub2APIRatioSyncPairPayload(pair, site, emptyPayload)
-	require.Error(t, err)
+	emptyAccessToken, refreshToken, err := decryptSub2APIRatioSyncPairPayload(pair, site, emptyPayload)
+	require.NoError(t, err)
+	assert.Empty(t, emptyAccessToken)
+	assert.Equal(t, "refresh", refreshToken)
 }
 
 func TestSub2APIRatioSyncLoginPayloadValidatesCredentialsAndFlattensCaptcha(t *testing.T) {
