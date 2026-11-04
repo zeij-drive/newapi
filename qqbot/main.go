@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -49,12 +53,17 @@ func run(ctx context.Context) error {
 		return errors.New("QQ platform authentication failed")
 	}
 	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(8 * time.Second).SetDebug(false)
+	ratioStore, err := newRatioNotificationStore(settings.ratioGroupsFile)
+	if err != nil {
+		return errors.New("QQ bot ratio notification state could not be loaded")
+	}
 	bot := NewBot(qqC2CSender{api: api}, inviteClient)
+	bot.ConfigureRatioNotifications(ratioStore, settings.ratioAdminOpenIDs)
 	bot.ConfigureGPTStatus(os.Getenv("QQ_BOT_PUBLIC_URL"), settings.webhookPath, settings.apiSecret)
 	event.RegisterHandlers(bot.C2CMessageHandler(), bot.GroupATMessageHandler())
 	server := &http.Server{
 		Addr:              settings.listenAddr,
-		Handler:           newWebhookHandlerWithGPTStatus(credentials, settings.webhookPath, settings.apiSecret),
+		Handler:           newWebhookHandlerWithGPTStatus(credentials, settings.webhookPath, settings.apiSecret, bot),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      12 * time.Second,
@@ -96,20 +105,25 @@ func readConfig(lookup func(string) (string, bool)) (config, error) {
 	}
 
 	settings := config{
-		appID:       value("QQ_BOT_APP_ID"),
-		appSecret:   value("QQ_BOT_APP_SECRET"),
-		apiBaseURL:  value("NEW_API_URL"),
-		apiSecret:   value("STARRY_API_BOT_SECRET"),
-		listenAddr:  value("QQ_BOT_LISTEN_ADDR"),
-		webhookPath: value("QQ_BOT_WEBHOOK_PATH"),
-		tlsCertFile: value("QQ_BOT_TLS_CERT_FILE"),
-		tlsKeyFile:  value("QQ_BOT_TLS_KEY_FILE"),
+		appID:             value("QQ_BOT_APP_ID"),
+		appSecret:         value("QQ_BOT_APP_SECRET"),
+		apiBaseURL:        value("NEW_API_URL"),
+		apiSecret:         value("STARRY_API_BOT_SECRET"),
+		listenAddr:        value("QQ_BOT_LISTEN_ADDR"),
+		webhookPath:       value("QQ_BOT_WEBHOOK_PATH"),
+		tlsCertFile:       value("QQ_BOT_TLS_CERT_FILE"),
+		tlsKeyFile:        value("QQ_BOT_TLS_KEY_FILE"),
+		ratioGroupsFile:   value("QQ_BOT_RATIO_GROUPS_FILE"),
+		ratioAdminOpenIDs: splitNonEmpty(value("QQ_BOT_RATIO_ADMIN_OPEN_IDS")),
 	}
 	if settings.listenAddr == "" {
 		settings.listenAddr = ":9000"
 	}
 	if settings.webhookPath == "" {
 		settings.webhookPath = "/qqbot"
+	}
+	if settings.ratioGroupsFile == "" {
+		settings.ratioGroupsFile = "ratio-notification-groups.json"
 	}
 	if settings.appID == "" || settings.appSecret == "" {
 		return config{}, errors.New("QQ_BOT_APP_ID and QQ_BOT_APP_SECRET are required")
@@ -133,7 +147,12 @@ func newWebhookHandler(credentials *token.QQBotCredentials, webhookPath string) 
 	return newWebhookHandlerWithGPTStatus(credentials, webhookPath, "")
 }
 
-func newWebhookHandlerWithGPTStatus(credentials *token.QQBotCredentials, webhookPath, statusSecret string) http.Handler {
+type ratioNotificationHandler interface {
+	NotifyRatioChanges(context.Context, []ratioChange) error
+	ReserveRatioNotificationNonce(string) bool
+}
+
+func newWebhookHandlerWithGPTStatus(credentials *token.QQBotCredentials, webhookPath, statusSecret string, ratioHandlers ...ratioNotificationHandler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
@@ -158,6 +177,40 @@ func newWebhookHandlerWithGPTStatus(credentials *token.QQBotCredentials, webhook
 			writer.Header().Set("Cache-Control", "private, max-age=60")
 			writer.WriteHeader(http.StatusOK)
 			_, _ = writer.Write(imageData)
+		})
+	}
+	ratioPath := strings.TrimRight(webhookPath, "/") + ratioNotificationPathSuffix
+	if len(ratioHandlers) > 0 && ratioHandlers[0] != nil {
+		ratioHandler := ratioHandlers[0]
+		mux.HandleFunc("POST "+ratioPath, func(writer http.ResponseWriter, request *http.Request) {
+			body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 128*1024+1))
+			if err != nil || len(body) == 0 || len(body) > 128*1024 {
+				http.Error(writer, "invalid ratio notification body", http.StatusBadRequest)
+				return
+			}
+			if !verifyRatioNotificationRequest(request, body, statusSecret) {
+				http.Error(writer, "invalid ratio notification signature", http.StatusUnauthorized)
+				return
+			}
+			changes, err := decodeRatioNotificationPayload(body)
+			if err != nil {
+				http.Error(writer, "invalid ratio notification payload", http.StatusBadRequest)
+				return
+			}
+			if !ratioHandler.ReserveRatioNotificationNonce(request.Header.Get("X-QQ-Bot-Nonce")) {
+				http.Error(writer, "duplicate ratio notification", http.StatusConflict)
+				return
+			}
+			go func(changes []ratioChange) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				if err := ratioHandler.NotifyRatioChanges(ctx, changes); err != nil {
+					log.Printf("QQ bot group-ratio announcement failed: %v", err)
+				}
+			}(append([]ratioChange(nil), changes...))
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(writer, `{"success":true}`)
 		})
 	}
 	mux.HandleFunc("POST "+webhookPath, func(writer http.ResponseWriter, request *http.Request) {
@@ -227,6 +280,36 @@ func newWebhookHandlerWithGPTStatus(credentials *token.QQBotCredentials, webhook
 	return mux
 }
 
+func verifyRatioNotificationRequest(request *http.Request, body []byte, secret string) bool {
+	if len(secret) < 32 || request.Method != http.MethodPost {
+		return false
+	}
+	timestamp := strings.TrimSpace(request.Header.Get("X-QQ-Bot-Timestamp"))
+	nonce := strings.TrimSpace(request.Header.Get("X-QQ-Bot-Nonce"))
+	providedText := strings.TrimSpace(request.Header.Get("X-QQ-Bot-Signature"))
+	if len(timestamp) < 1 || len(timestamp) > 12 || len(nonce) != 32 || len(providedText) != sha256.Size*2 {
+		return false
+	}
+	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
+	now := time.Now().Unix()
+	if err != nil || strconv.FormatInt(issuedAt, 10) != timestamp || issuedAt < now-300 || issuedAt > now+300 {
+		return false
+	}
+	if nonce != strings.ToLower(nonce) {
+		return false
+	}
+	if _, err := hex.DecodeString(nonce); err != nil {
+		return false
+	}
+	provided, err := hex.DecodeString(providedText)
+	if err != nil || len(provided) != sha256.Size {
+		return false
+	}
+	expected := ratioNotificationSignature(secret, http.MethodPost, request.URL.EscapedPath(), timestamp, nonce, body)
+	expectedBytes, _ := hex.DecodeString(expected)
+	return hmac.Equal(provided, expectedBytes)
+}
+
 type callbackPayload struct {
 	dto.WSPayloadBase
 	Data json.RawMessage `json:"d"`
@@ -258,6 +341,14 @@ func (sender qqC2CSender) SendGroupReply(ctx context.Context, groupID, messageID
 			MessageID:             messageID,
 			IgnoreGetMessageError: true,
 		},
+	})
+	return err
+}
+
+func (sender qqC2CSender) SendGroupAnnouncement(ctx context.Context, groupID, content string) error {
+	_, err := sender.api.PostGroupMessage(ctx, groupID, dto.MessageToCreate{
+		Content:   content,
+		Timestamp: time.Now().UnixMilli(),
 	})
 	return err
 }

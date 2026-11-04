@@ -49,9 +49,12 @@ PHP 文件和示例配置位于 `qqbot/php/`：
 
 ```env
 STARRY_API_BOT_SECRET=在此粘贴至少32字符的随机值
+QQ_BOT_RATIO_NOTIFY_URL=https://你的机器人域名/qqbot/ratio-notification
 ```
 
 例如可在安全环境中运行 `openssl rand -hex 32` 生成。不要把密钥提交到仓库或公开日志。
+
+设置倍率通知回调后，NewAPI 在“分组倍率”实际变化时会向该地址发送签名通知；手动保存和倍率同步台自动同步都会触发。新增或删除分组不会当作涨跌价通知。群聊中由配置的 QQ OpenID 使用 `/sapi 倍率通知 开启` 或 `/sapi 倍率通知 关闭` 管理订阅；已开启的群聊会收到 @全体消息，列出每个分组的旧倍率和新倍率。PHP 面板版与 Go 版共用回调地址和签名协议。
 
 ## 3. 在 Linux 虚拟主机部署
 
@@ -123,6 +126,8 @@ docker run -d --name starryapi-qqbot --restart unless-stopped \
 | `QQ_BOT_WEBHOOK_PATH` | 否 | webhook 路径，默认 `/qqbot`。 |
 | `QQ_BOT_TLS_CERT_FILE` | 否 | webhook TLS 证书路径；与 TLS key 一起配置时 Bot 自行提供 HTTPS。 |
 | `QQ_BOT_TLS_KEY_FILE` | 否 | webhook TLS 私钥路径。 |
+| `QQ_BOT_RATIO_ADMIN_OPEN_IDS` | 否 | 允许管理倍率通知订阅的 QQ OpenID，使用逗号、分号或空格分隔。 |
+| `QQ_BOT_RATIO_GROUPS_FILE` | 否 | 群通知订阅和防重放状态文件；Go 版默认使用当前工作目录下的 `ratio-notification-groups.json`，PHP 版默认存入系统临时目录。 |
 
 PHP 面板部署还支持以下可选变量：
 
@@ -134,6 +139,10 @@ PHP 面板部署还支持以下可选变量：
 | `GPTSTATUS_STATE_FILE` | PHP 最近一次状态查询快照及图片签名数据文件的绝对路径；默认位于按 QQ App ID 隔离的系统临时目录。应放在网站公开目录之外。 |
 | `GPTSTATUS_CACHE_DIR` | `GPTSTATUS_STATE_FILE` 未设置时使用的私有缓存目录；默认位于系统临时目录。 |
 | `GPTSTATUS_IMAGE_URL` | 可选的自定义状态图 PHP 端点完整 URL；默认自动由 `QQ_BOT_PUBLIC_URL` 加 `/gptstatus-image.php`。 |
+| `QQ_BOT_RATIO_ADMIN_OPEN_IDS` | 允许管理倍率通知订阅的 QQ OpenID，使用逗号、分号或空格分隔。 |
+| `QQ_BOT_RATIO_GROUPS_FILE` | 群通知订阅和防重放状态文件；建议放在网站根目录以外且 PHP-FPM 可写的位置。 |
+
+NewAPI 另需设置 `QQ_BOT_RATIO_NOTIFY_URL` 为 Bot 回调地址，例如 `https://bot.example.com/qqbot/ratio-notification`。NewAPI 与 Bot 使用完全相同的 `STARRY_API_BOT_SECRET`；通知请求包含时间戳、一次性 nonce 和 HMAC-SHA256 签名，Bot 会拒绝过期或重放请求。
 
 Go 版和 PHP 版的 `/gptstatus` 都会在收到指令时直接抓取 `https://status.openai.com/` 网页 HTML 源码并解析，然后发送状态图片；两种版本均无自动推送、订阅或 Cron 轮询。PHP 版需要 GD 扩展；Go 版不需要额外状态文件配置。
 

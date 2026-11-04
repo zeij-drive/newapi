@@ -295,6 +295,11 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
+	var previousGroupRatios map[string]float64
+	trackGroupRatioChanges := key == "GroupRatio"
+	if trackGroupRatioChanges {
+		previousGroupRatios = ratio_setting.GetGroupRatioCopy()
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -307,7 +312,13 @@ func UpdateOption(key string, value string) error {
 	// otherwise it will execute Update (with all fields).
 	DB.Save(&option)
 	// Update OptionMap
-	return updateOptionMap(key, value)
+	if err := updateOptionMap(key, value); err != nil {
+		return err
+	}
+	if trackGroupRatioChanges {
+		common.NotifyGroupRatioChanges(previousGroupRatios, ratio_setting.GetGroupRatioCopy())
+	}
+	return nil
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -329,6 +340,11 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
+	}
+	var previousGroupRatios map[string]float64
+	_, trackGroupRatioChanges := values["GroupRatio"]
+	if trackGroupRatioChanges {
+		previousGroupRatios = ratio_setting.GetGroupRatioCopy()
 	}
 	var policySnapshot *RequestPolicySnapshot
 	for key := range values {
@@ -370,6 +386,9 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
+	}
+	if trackGroupRatioChanges {
+		common.NotifyGroupRatioChanges(previousGroupRatios, ratio_setting.GetGroupRatioCopy())
 	}
 	if policySnapshot != nil {
 		requestPolicySnapshot.Store(policySnapshot)
