@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,10 +193,14 @@ export function parseTaskResult() { return {}; }
 // through the same public entry points used by the relay.
 func TestPreConsumePolicyDatabaseMatrix(t *testing.T) {
 	previousConfig := config.GlobalConfig.ExportAllConfigs()
+	previousGroupGroupRatio := ratio_setting.GroupGroupRatio2JSONString()
+	previousGroupGroupRatioAdjustment := ratio_setting.GroupGroupRatioAdjustment2JSONString()
 	previousUnit, previousBatch := common.QuotaPerUnit, common.BatchUpdateEnabled
 	common.QuotaPerUnit, common.BatchUpdateEnabled = 500000, false
 	t.Cleanup(func() {
 		require.NoError(t, config.GlobalConfig.LoadFromDB(previousConfig))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previousGroupGroupRatio))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(previousGroupGroupRatioAdjustment))
 		common.QuotaPerUnit, common.BatchUpdateEnabled = previousUnit, previousBatch
 	})
 	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
@@ -205,6 +210,21 @@ func TestPreConsumePolicyDatabaseMatrix(t *testing.T) {
 			}
 			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
 			require.NoError(t, db.AutoMigrate(&model.Token{}))
+			const downstreamAdjustments = `{"vip":{"GPT福利":0.005,"GPT免费":0}}`
+			var response struct{ Success bool }
+			modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: "GroupGroupRatioAdjustment", Value: downstreamAdjustments}, &response)
+			require.True(t, response.Success)
+			var savedPricing model.Option
+			require.NoError(t, db.Where(&model.Option{Key: "GroupGroupRatioAdjustment"}).First(&savedPricing).Error)
+			assert.JSONEq(t, downstreamAdjustments, savedPricing.Value)
+
+			modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: "GroupGroupRatioAdjustment", Value: `{"vip":{"GPT福利":-0.005}}`}, &response)
+			assert.False(t, response.Success)
+			require.NoError(t, db.Where(&model.Option{Key: "GroupGroupRatioAdjustment"}).First(&savedPricing).Error)
+			assert.JSONEq(t, downstreamAdjustments, savedPricing.Value, "invalid adjustments must preserve the previous configuration")
+			assert.Error(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(`{"vip":{"GPT福利":-0.005}}`))
+			assert.JSONEq(t, downstreamAdjustments, ratio_setting.GroupGroupRatioAdjustment2JSONString())
+
 			for key, value := range map[string]string{
 				"quota_setting.trust_quota_usd":        "10.5",
 				"quota_setting.pre_consume_multiplier": "1.5",

@@ -175,7 +175,11 @@ func qqBotSignature(secret, method, path, timestamp, nonce string, body []byte) 
 }
 
 func validateQQBotRequest(secret string, c *gin.Context, body []byte) error {
-	if len(secret) < 32 || c.Request.Method != http.MethodPost || c.Request.URL.Path != qqBotRequestPath {
+	return validateQQBotSignedRequest(secret, c, body, http.MethodPost, qqBotRequestPath)
+}
+
+func validateQQBotSignedRequest(secret string, c *gin.Context, body []byte, method, path string) error {
+	if len(secret) < 32 || c.Request.Method != method || c.Request.URL.Path != path {
 		return errQQBotRequestInvalid
 	}
 	timestamp := strings.TrimSpace(c.GetHeader(qqBotTimestampHeader))
@@ -199,7 +203,7 @@ func validateQQBotRequest(secret string, c *gin.Context, body []byte) error {
 	if err != nil || len(provided) != sha256.Size {
 		return errQQBotRequestInvalid
 	}
-	expected := qqBotSignature(secret, c.Request.Method, qqBotRequestPath, timestamp, nonce, body)
+	expected := qqBotSignature(secret, c.Request.Method, path, timestamp, nonce, body)
 	if !hmac.Equal(provided, expected) {
 		return errQQBotRequestInvalid
 	}

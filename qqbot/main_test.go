@@ -146,6 +146,10 @@ func TestNewWebhookHandlerHealthCheck(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	require.Equal(t, http.StatusNoContent, response.Code)
+
+	removedEndpoint := httptest.NewRecorder()
+	handler.ServeHTTP(removedEndpoint, httptest.NewRequest(http.MethodPost, "/qqbot/ratio-notification", strings.NewReader(`{"groups":[]}`)))
+	require.Equal(t, http.StatusNotFound, removedEndpoint.Code)
 }
 
 func TestNewWebhookHandlerAcknowledgesSignedHeartbeat(t *testing.T) {

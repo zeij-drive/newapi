@@ -11,10 +11,6 @@ return [
     // 'qq_bot_token_cache_file' => '/home/USER/.cache/starryapi-qqbot-token.json',
     // Required for /gptstatus images. Set this to the public HTTPS URL of this PHP directory.
     'qq_bot_public_url' => 'https://bot.example.com/qqbot',
-    // QQ OpenID values allowed to manage group-wide multiplier notices.
-    'qq_bot_ratio_admin_open_ids' => 'qq-open-id-1,qq-open-id-2',
-    // Optional; persistent state and replay protection files should be outside the document root.
-    // 'qq_bot_ratio_groups_file' => '/home/USER/.cache/starryapi-qqbot/ratio-notification-groups.json',
     // Optional; stores the latest fetched status and image-signing token outside the public document root.
     // 'gptstatus_state_file' => '/home/USER/.cache/starryapi-qqbot/state.json',
 ];

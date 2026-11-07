@@ -1,0 +1,1 @@
+"""StarryAPI AstrBot plugin package."""

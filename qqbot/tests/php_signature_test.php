@@ -40,10 +40,10 @@ if (groupCommandReply('<@!bot-id> /sapi typo') !== '指令不存在'
     || groupCommandReply('<@!bot-id> /unknown') !== '指令不存在') {
     throw new RuntimeException('PHP QQ bot must report unknown group commands');
 }
-$ratioCommand = parseGroupCommand('<@!bot-id> /sapi 倍率通知 开启');
-if ($ratioCommand !== ['ratio_notify', true]
-    || groupCommandReply('<@!bot-id> /sapi 倍率通知') !== '用法：/sapi 倍率通知 开启|关闭') {
-    throw new RuntimeException('PHP QQ bot must recognize group multiplier notice commands');
+$removedRatioCommand = parseGroupCommand('<@!bot-id> /sapi 倍率通知 开启');
+if ($removedRatioCommand !== ['unknown', true]
+    || groupCommandReply('<@!bot-id> /sapi 倍率通知 开启') !== '指令不存在') {
+    throw new RuntimeException('PHP QQ bot must report the removed multiplier notice command as unknown');
 }
 $unknownPrivateCommand = parseCommand('/sapi typo');
 if ($unknownPrivateCommand !== ['unknown', true]) {
@@ -110,51 +110,8 @@ if (isValidGptStatusImageRequest($statusSettings, $statusState, $statusImageQuer
     throw new RuntimeException('PHP QQ bot must reject tampered status-image signatures');
 }
 
-$ratioStateFile = sys_get_temp_dir() . '/starryapi-qqbot-ratio-test-' . bin2hex(random_bytes(8)) . '/groups.json';
-$ratioSettings = [
-    'ratio_state_file' => $ratioStateFile,
-    'ratio_admin_open_ids' => 'qq-admin-open-id',
-    'bot_secret' => 'test-shared-secret-at-least-32-characters',
-];
-setRatioNotificationEnabled($ratioSettings, 'group-open-id', true);
-$ratioBody = json_encode([
-    'groups' => [
-        ['name' => 'GPT破甲', 'old_ratio' => 0.78, 'new_ratio' => 1],
-        ['name' => 'GPT备用', 'old_ratio' => 1, 'new_ratio' => 0.01],
-    ],
-], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-$ratioTimestamp = (string) time();
-$ratioNonce = bin2hex(random_bytes(16));
-$ratioPath = '/qqbot/ratio-notification';
-$_SERVER['HTTP_X_QQ_BOT_TIMESTAMP'] = $ratioTimestamp;
-$_SERVER['HTTP_X_QQ_BOT_NONCE'] = $ratioNonce;
-$_SERVER['HTTP_X_QQ_BOT_SIGNATURE'] = signInviteRequest(
-    $ratioSettings['bot_secret'],
-    'POST',
-    $ratioPath,
-    $ratioTimestamp,
-    $ratioNonce,
-    $ratioBody
-);
-$ratioNotification = handleRatioNotificationCallback($ratioSettings, $ratioPath, $ratioBody);
-if ($ratioNotification['groups'] !== ['group-open-id']
-    || $ratioNotification['content'] !== "@everyone 分组倍率变更通知\nGPT破甲分组涨价，0.78x->1x\nGPT备用分组降价，1x->0.01x") {
-    throw new RuntimeException('PHP QQ bot must verify and format signed multiplier notifications');
-}
-try {
-    handleRatioNotificationCallback($ratioSettings, $ratioPath, $ratioBody);
-    throw new RuntimeException('PHP QQ bot must reject replayed multiplier notifications');
-} catch (RuntimeException $error) {
-    if (strpos($error->getMessage(), 'duplicate') === false) {
-        throw $error;
-    }
-}
-foreach ([$ratioStateFile, $ratioStateFile . '.nonces'] as $path) {
-    @unlink($path);
-}
-@rmdir(dirname($ratioStateFile));
 @unlink($stateFile);
 @unlink($stateFile . '.lock');
 @rmdir(dirname($stateFile));
 
-fwrite(STDOUT, "PHP QQ bot signature, multiplier notification, private-chat and GPT status vectors passed\n");
+fwrite(STDOUT, "PHP QQ bot signature, private-chat and GPT status vectors passed\n");

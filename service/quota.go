@@ -113,11 +113,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	actualGroupRatio := groupRatio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		actualGroupRatio = userGroupRatio
-	}
+	actualGroupRatio, _ := ratio_setting.GetEffectiveGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{

@@ -22,6 +22,7 @@ func TestParseCommand(t *testing.T) {
 		{name: "invite requires email", content: "/sapi 邀请码", command: "invite_usage", matched: true},
 		{name: "invite with email", content: "/sapi 邀请码 person@example.com", command: "invite", matched: true},
 		{name: "invite is case insensitive for command", content: "/SAPI 邀请码 person@example.com", command: "invite", matched: true},
+		{name: "removed ratio notification command", content: "/sapi 倍率通知 开启", command: "invalid", matched: true},
 		{name: "unknown command", content: "/sapi status", command: "invalid", matched: true},
 		{name: "different command", content: "/help", matched: false},
 		{name: "empty", content: "", matched: false},

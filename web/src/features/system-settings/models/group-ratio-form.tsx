@@ -70,6 +70,7 @@ type GroupFormValues = {
   TopupGroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
+  GroupGroupRatioAdjustment: string
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
@@ -171,6 +172,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             topupGroupRatio={values.TopupGroupRatio ?? ''}
             userUsableGroups={values.UserUsableGroups ?? ''}
             groupGroupRatio={values.GroupGroupRatio ?? ''}
+            groupGroupRatioAdjustment={values.GroupGroupRatioAdjustment ?? ''}
             autoGroups={values.AutoGroups ?? ''}
             maxTokenAutoGroupsField={
               <FormField
@@ -311,10 +313,12 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <FormField
               control={form.control}
-              name='GroupGroupRatio'
+              name='GroupGroupRatioAdjustment'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Inter-group overrides')}</FormLabel>
+                  <FormLabel>
+                    {t('Downstream ratio adjustments (JSON)')}
+                  </FormLabel>
                   <FormControl>
                     <JsonCodeEditor
                       value={field.value}
@@ -325,10 +329,39 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Nested JSON: source group →')}{' '}
-                    {`{ targetGroup: ratio }`}{' '}
+                    {t('Nested JSON: identity group →')}{' '}
+                    {`{ billingGroup: adjustment }`}{' '}
                     {t(
-                      'to override billing when a user in one group uses a token of another group.'
+                      "Each adjustment is subtracted from the billing group's current base ratio and cannot reduce it below 0."
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupGroupRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Legacy special ratio overrides (JSON)')}
+                  </FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Nested JSON: identity group →')}{' '}
+                    {`{ billingGroup: finalRatio }`}{' '}
+                    {t(
+                      'Legacy fixed ratios are used only when no downstream adjustment is configured for the same groups.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -484,7 +517,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
           <SheetTitle>{t('Group pricing usage guide')}</SheetTitle>
           <SheetDescription>
             {t(
-              'Understand how user groups, token groups, ratios, and special rules work together.'
+              'Understand how base ratios and downstream adjustments determine the billed ratio.'
             )}
           </SheetDescription>
         </SheetHeader>
@@ -515,7 +548,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </span>
                 {': '}
                 {t(
-                  'decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.'
+                  'decides the top-up ratio, which groups the user can pick for tokens, and which downstream adjustments apply.'
                 )}
               </p>
             </div>
@@ -539,7 +572,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Find the ratio.')}
                 </span>{' '}
                 {t(
-                  'Look for a special ratio rule matching this user group and this billing group. If one exists, use its ratio. Otherwise use the billing group base ratio from the pricing table.'
+                  'Find a downstream adjustment for this user group and billing group and subtract it from the current base ratio. Without an adjustment, use a legacy fixed ratio if configured; otherwise use the base ratio.'
                 )}
               </li>
               <li>
@@ -562,7 +595,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
             <h3 className='text-sm font-semibold'>{t('Worked example')}</h3>
             <p className='text-muted-foreground text-sm leading-6'>
               {t(
-                'The admin configured three groups and one special ratio rule:'
+                'The admin configured three groups and one downstream adjustment:'
               )}
             </p>
 
@@ -600,15 +633,22 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
 
             <div className='overflow-hidden rounded-lg border'>
               <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
-                {t('Special ratio rules')}
+                {t('Downstream price settings')}
               </div>
               <div className='p-3 text-sm leading-6'>
-                {t('Users of vip, when billed as premium, pay ratio')}{' '}
+                {t('Users in vip have this adjustment when billed as premium:')}{' '}
                 <span className='bg-primary/10 ring-primary/40 rounded px-1.5 py-0.5 font-semibold ring-1'>
-                  0.3
+                  0.2x
                 </span>{' '}
                 <span className='text-muted-foreground text-xs'>
-                  {t('(instead of {{ratio}})', { ratio: 0.5 })}
+                  {t(
+                    'Effective ratio: {{baseRatio}}x - {{adjustment}}x = {{effectiveRatio}}x',
+                    {
+                      baseRatio: 0.5,
+                      adjustment: 0.2,
+                      effectiveRatio: 0.3,
+                    }
+                  )}
                 </span>
               </div>
             </div>
@@ -632,7 +672,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'There is a rule for vip billed as premium → use its ratio 0.3'
+                      'Subtract the configured 0.2x from premium base ratio 0.5x → use 0.3x'
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
@@ -655,7 +695,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'No rule for vip billed as default → use the base ratio of default, 1.0 (the 0.8 of vip is not used)'
+                      "No downstream adjustment for vip using default → use default's base ratio of 1.0x"
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
@@ -678,7 +718,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'No rule for vip billed as vip → use the base ratio of vip, 0.8'
+                      "No downstream adjustment for vip using vip → use vip's base ratio of 0.8x"
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
@@ -732,22 +772,24 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
             </AccordionItem>
 
             <AccordionItem value='special-ratio'>
-              <AccordionTrigger>{t('Special ratio rules')}</AccordionTrigger>
+              <AccordionTrigger>
+                {t('Downstream price settings')}
+              </AccordionTrigger>
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users pay 0.8 when billed as standard, and 0.3 when billed as premium.'
+                    'In JSON, the identity group is the outer key and the billing group is the inner key. Each value is subtracted from the current base ratio for that combination.'
                   )}
                 </p>
                 <GuideCodeBlock>{`{
   "vip": {
-    "standard": 0.8,
-    "premium": 0.3
+    "standard": 0.2,
+    "premium": 0.2
   }
 }`}</GuideCodeBlock>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'Only configured combinations are overridden. All other calls keep the billing group base ratio.'
+                    'The effective ratio is the current base ratio minus this adjustment, clamped at 0. If the base ratio changes, the effective downstream ratio changes automatically.'
                   )}
                 </p>
               </AccordionContent>

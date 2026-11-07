@@ -161,6 +161,7 @@ func InitOptionMap() {
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
 	common.OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString()
+	common.OptionMap["GroupGroupRatioAdjustment"] = ratio_setting.GroupGroupRatioAdjustment2JSONString()
 	common.OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString()
 	common.OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString()
 	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
@@ -270,6 +271,12 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if key == "GroupGroupRatio" {
+		return ratio_setting.CheckGroupGroupRatio(value)
+	}
+	if key == "GroupGroupRatioAdjustment" {
+		return ratio_setting.CheckGroupGroupRatioAdjustment(value)
+	}
 	return nil
 }
 
@@ -295,11 +302,6 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
-	var previousGroupRatios map[string]float64
-	trackGroupRatioChanges := key == "GroupRatio"
-	if trackGroupRatioChanges {
-		previousGroupRatios = ratio_setting.GetGroupRatioCopy()
-	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -314,9 +316,6 @@ func UpdateOption(key string, value string) error {
 	// Update OptionMap
 	if err := updateOptionMap(key, value); err != nil {
 		return err
-	}
-	if trackGroupRatioChanges {
-		common.NotifyGroupRatioChanges(previousGroupRatios, ratio_setting.GetGroupRatioCopy())
 	}
 	return nil
 }
@@ -340,11 +339,6 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
-	}
-	var previousGroupRatios map[string]float64
-	_, trackGroupRatioChanges := values["GroupRatio"]
-	if trackGroupRatioChanges {
-		previousGroupRatios = ratio_setting.GetGroupRatioCopy()
 	}
 	var policySnapshot *RequestPolicySnapshot
 	for key := range values {
@@ -386,9 +380,6 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
-	}
-	if trackGroupRatioChanges {
-		common.NotifyGroupRatioChanges(previousGroupRatios, ratio_setting.GetGroupRatioCopy())
 	}
 	if policySnapshot != nil {
 		requestPolicySnapshot.Store(policySnapshot)
@@ -711,6 +702,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
+	case "GroupGroupRatioAdjustment":
+		err = ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(value)
 	case "UserUsableGroups":
 		err = setting.UpdateUserUsableGroupsByJSONString(value)
 	case "CompletionRatio":

@@ -1,0 +1,15 @@
+{
+  "new_api_url": {
+    "description": "NewAPI 的 HTTPS 地址（本机开发可使用回环 HTTP）",
+    "type": "string",
+    "default": "",
+    "hint": "例如 https://newapi.example.com；此地址用于发送带 HMAC 签名的邀请码请求。"
+  },
+  "starry_api_bot_secret": {
+    "description": "StarryAPI 与 NewAPI 共用的 HMAC 密钥",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "两端必须逐字一致，至少 32 个字符；不要写入日志或消息。"
+  }
+}

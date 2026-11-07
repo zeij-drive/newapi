@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,8 +49,8 @@ func channelStatusTestDB(t *testing.T, kind, dsn string) *gorm.DB {
 	common.SetDatabaseTypes(databaseType, databaseType)
 	t.Setenv("LOG_SQL_DSN", "")
 	require.NoError(t, model.InitLogDB())
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Option{}, &model.User{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.Log{}))
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Option{}, &model.User{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Option{}, &model.User{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.Log{}, &model.AuditLog{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Option{}, &model.User{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.Log{}, &model.AuditLog{}))
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-4o-mini":1}`))
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": "{}", "billing_expr": "{}", "plugin_billing_expr": "{}"})
@@ -233,12 +235,84 @@ func TestChannelStatusDatabaseMatrix(t *testing.T) {
 				}
 			}
 			assert.True(t, found)
-			config.Probes = []channelStatusProbe{}
-			deleted := modelManagementRequest(t, UpdateChannelStatusProbes, http.MethodPut, "/api/channel/status/probes/", config, nil)
-			require.Equal(t, http.StatusOK, deleted.Code)
-			_, observations, err := readChannelStatusState()
+			deleteRecorder := httptest.NewRecorder()
+			deleteContext, _ := gin.CreateTestContext(deleteRecorder)
+			deleteContext.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channel.Id)}}
+			deleteContext.Request = httptest.NewRequest(http.MethodDelete, "/api/channel/"+strconv.Itoa(channel.Id), nil)
+			deleteContext.Set("id", user.Id)
+			deleteContext.Set("role", common.RoleRootUser)
+			DeleteChannel(deleteContext)
+			require.Contains(t, deleteRecorder.Body.String(), `"success":true`)
+			cleanedConfig, observations, err := readChannelStatusState()
 			require.NoError(t, err)
-			assert.Empty(t, observations, "deleted probe history must be pruned")
+			assert.Empty(t, cleanedConfig.Probes, "deleting a channel must remove probes targeting it")
+			assert.Empty(t, observations, "deleting a channel must remove its probe history")
+			var probeSettingsResponse struct {
+				Success bool `json:"success"`
+				Data    struct {
+					Config channelStatusProbeConfig `json:"config"`
+				} `json:"data"`
+			}
+			settings := modelManagementRequest(t, GetChannelStatusProbes, http.MethodGet, "/api/channel/status/probes/", nil, &probeSettingsResponse)
+			require.Equal(t, http.StatusOK, settings.Code)
+			require.True(t, probeSettingsResponse.Success)
+			assert.Empty(t, probeSettingsResponse.Data.Config.Probes)
+			editable := modelManagementRequest(t, UpdateChannelStatusProbes, http.MethodPut, "/api/channel/status/probes/", probeSettingsResponse.Data.Config, nil)
+			require.Equal(t, http.StatusOK, editable.Code, "probe settings should remain editable after deleting their target channel")
+			for _, deletion := range []struct {
+				name   string
+				status int
+			}{
+				{name: "batch", status: common.ChannelStatusEnabled},
+				{name: "disabled", status: common.ChannelStatusManuallyDisabled},
+			} {
+				t.Run(deletion.name+" channel deletion removes its probe", func(t *testing.T) {
+					target := model.Channel{
+						Name:   "probe deletion target",
+						Key:    "probe-deletion-key",
+						Models: "gpt-4o-mini",
+						Group:  "default",
+						Type:   constant.ChannelTypeOpenAI,
+						Status: deletion.status,
+					}
+					require.NoError(t, db.Create(&target).Error)
+					deletionProbe := channelStatusProbe{
+						ID: "probe-deletion-" + deletion.name, Name: "deletion test", ChannelID: target.Id,
+						Model: "gpt-4o-mini", TimeoutSeconds: 5, Enabled: true,
+					}
+					deletionConfig := channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{deletionProbe}}
+					configData, err := common.Marshal(deletionConfig)
+					require.NoError(t, err)
+					resultsData, err := common.Marshal(map[string]channelStatusObservation{
+						deletionProbe.ID: {Probe: deletionProbe, Result: channelStatusProbeResult{ProbeID: deletionProbe.ID, Status: channelStatusUnknown}},
+					})
+					require.NoError(t, err)
+					require.NoError(t, model.UpdateOptionsBulk(map[string]string{
+						channelStatusConfigOption:  string(configData),
+						channelStatusResultsOption: string(resultsData),
+					}))
+
+					deleteRecorder := httptest.NewRecorder()
+					deleteContext, _ := gin.CreateTestContext(deleteRecorder)
+					deleteContext.Set("id", user.Id)
+					deleteContext.Set("role", common.RoleRootUser)
+					if deletion.name == "batch" {
+						requestBody, err := common.Marshal(ChannelBatch{Ids: []int{target.Id}})
+						require.NoError(t, err)
+						deleteContext.Request = httptest.NewRequest(http.MethodDelete, "/api/channel/batch", bytes.NewReader(requestBody))
+						deleteContext.Request.Header.Set("Content-Type", "application/json")
+						DeleteChannelBatch(deleteContext)
+					} else {
+						deleteContext.Request = httptest.NewRequest(http.MethodDelete, "/api/channel/disabled", nil)
+						DeleteDisabledChannel(deleteContext)
+					}
+					require.Contains(t, deleteRecorder.Body.String(), `"success":true`)
+					cleanedConfig, cleanedResults, err := readChannelStatusState()
+					require.NoError(t, err)
+					assert.Empty(t, cleanedConfig.Probes)
+					assert.Empty(t, cleanedResults)
+				})
+			}
 			assert.False(t, (channelStatusProbeHandler{}).Enabled())
 			emptyPublic := modelManagementRequest(t, GetChannelGroupStatus, http.MethodGet, "/api/channel/status/", nil, &groups)
 			require.Equal(t, http.StatusOK, emptyPublic.Code)

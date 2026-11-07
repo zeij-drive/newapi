@@ -39,6 +39,7 @@ const defaults = {
   TopupGroupRatio: '{"vip":1.2}',
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
   GroupGroupRatio: '{}',
+  GroupGroupRatioAdjustment: '{}',
   AutoGroups: '["default","vip"]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
@@ -50,6 +51,7 @@ const schema = z.object({
   TopupGroupRatio: z.string(),
   UserUsableGroups: z.string(),
   GroupGroupRatio: z.string(),
+  GroupGroupRatioAdjustment: z.string(),
   AutoGroups: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
@@ -121,7 +123,7 @@ describe('group settings workspace', () => {
     pricing.focus()
     await user.keyboard('{ArrowRight}{Enter}')
     expect(
-      screen.getByRole('tab', { name: 'Special ratio rules' })
+      screen.getByRole('tab', { name: 'Downstream price settings' })
     ).toHaveAttribute('aria-selected', 'true')
     expect(
       screen.queryByRole('table', { name: 'Pricing groups' })
@@ -162,7 +164,9 @@ describe('group settings workspace', () => {
     expect(screen.getByRole('button', { name: 'Move vip up' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Move vip down' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(onSave.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -205,7 +209,9 @@ describe('group settings workspace', () => {
     )
     expect(screen.getByText('Not in pricing table')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(JSON.parse(onSave.mock.calls[0][0].AutoGroups)).toEqual([
       'vip',
@@ -247,7 +253,9 @@ describe('group settings workspace', () => {
       { target: { value: '0' } }
     )
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(
         screen.getByRole('tab', { name: 'Auto group order' })
@@ -279,12 +287,94 @@ describe('group settings workspace', () => {
       screen.getByText('No groups yet. Add a group to get started.')
     ).toBeVisible()
     expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled()
-    await user.click(screen.getByRole('tab', { name: 'Special ratio rules' }))
+    await user.click(
+      screen.getByRole('tab', { name: 'Downstream price settings' })
+    )
     expect(
-      screen.getByText('Base group ratios apply until you add an override.')
+      screen.getByText(
+        'Each downstream adjustment is subtracted from the current billing group ratio.'
+      )
     ).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Auto group order' }))
     expect(screen.getByText('No auto groups configured')).toBeVisible()
+  })
+
+  it('saves a downstream adjustment and recalculates it when the base ratio changes', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(
+      <Fixture
+        onSave={onSave}
+        initial={{
+          GroupRatio: '{"default":1,"vip":0.8,"GPT福利":0.01}',
+          UserUsableGroups:
+            '{"default":"Standard access","vip":"Premium access","GPT福利":"福利组"}',
+        }}
+      />
+    )
+
+    await user.click(
+      screen.getByRole('tab', { name: 'Downstream price settings' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Add identity group' }))
+    const identityGroupDialog = screen.getByRole('dialog')
+    const identityGroupSelect = within(identityGroupDialog).getByRole(
+      'combobox',
+      { name: 'Select an identity group' }
+    )
+    await user.click(identityGroupSelect)
+    await user.click(screen.getByRole('option', { name: 'vip' }))
+    await user.click(
+      within(identityGroupDialog).getByRole('button', { name: 'Add' })
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Add downstream adjustment' })
+    )
+    const downstreamDialog = screen.getByRole('dialog')
+    const billingGroupSelect = within(downstreamDialog).getByRole('combobox', {
+      name: 'Select a group',
+    })
+    await user.click(billingGroupSelect)
+    await user.click(screen.getByRole('option', { name: 'GPT福利' }))
+    await user.type(
+      within(downstreamDialog).getByRole('spinbutton', {
+        name: 'Downward adjustment',
+      }),
+      '0.005'
+    )
+    await user.click(
+      within(downstreamDialog).getByRole('button', { name: 'Add' })
+    )
+
+    expect(
+      screen.getByText('Effective ratio: 0.01x - 0.005x = 0.005x')
+    ).toBeVisible()
+    await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
+    const billingGroupRow = screen
+      .getAllByRole('row')
+      .find((row) => within(row).queryByDisplayValue('GPT福利'))
+    expect(billingGroupRow).toBeDefined()
+    fireEvent.change(
+      within(billingGroupRow as HTMLElement).getByRole('spinbutton', {
+        name: 'Ratio',
+      }),
+      { target: { value: '0.02' } }
+    )
+    await user.click(
+      screen.getByRole('tab', { name: 'Downstream price settings' })
+    )
+    expect(
+      screen.getByText('Effective ratio: 0.02x - 0.005x = 0.015x')
+    ).toBeVisible()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(
+      JSON.parse(onSave.mock.calls[0]?.[0].GroupGroupRatioAdjustment ?? '{}')
+    ).toEqual({ vip: { GPT福利: 0.005 } })
   })
 
   it('preserves pricing edits when switching between visual and JSON editors', async () => {

@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,62 @@ func TestModelPriceHelperUsesSelectedAutoGroupForBilling(t *testing.T) {
 	assert.Equal(t, "vip", info.UsingGroup)
 	assert.Equal(t, 2.0, price.GroupRatioInfo.GroupRatio)
 	assert.Equal(t, 2.0, price.ModelRatio*price.GroupRatioInfo.GroupRatio)
+}
+
+func TestModelPriceHelperUsesDownstreamGroupRatio(t *testing.T) {
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	savedGroupGroupRatios := ratio_setting.GroupGroupRatio2JSONString()
+	savedGroupGroupRatioAdjustments := ratio_setting.GroupGroupRatioAdjustment2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(savedGroupGroupRatios))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(savedGroupGroupRatioAdjustments))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"downstream-pricing-model":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"GPT福利":0.01}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(`{}`))
+
+	priceFor := func() hosttypes.PriceData {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{
+			OriginModelName: "downstream-pricing-model",
+			UserGroup:       "vip",
+			UsingGroup:      "GPT福利",
+			BillingRequestInput: &billingexpr.RequestInput{
+				Body: []byte(`{}`),
+			},
+		}
+		price, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		return price
+	}
+
+	basePrice := priceFor()
+	require.Equal(t, 0.01, basePrice.GroupRatioInfo.GroupRatio)
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(`{"vip":{"GPT福利":0.005}}`))
+	downstreamPrice := priceFor()
+	assert.Equal(t, 0.005, downstreamPrice.GroupRatioInfo.GroupRatio)
+	assert.True(t, downstreamPrice.GroupRatioInfo.HasSpecialRatio)
+	assert.Less(t, downstreamPrice.QuotaToPreConsume, basePrice.QuotaToPreConsume)
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"GPT福利":0.02}`))
+	updatedBasePrice := priceFor()
+	assert.Equal(t, 0.015, updatedBasePrice.GroupRatioInfo.GroupRatio)
+	assert.True(t, updatedBasePrice.GroupRatioInfo.HasSpecialRatio)
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"GPT福利":0.001}`))
+	clampedPrice := priceFor()
+	assert.Zero(t, clampedPrice.GroupRatioInfo.GroupRatio, "an adjustment larger than the base ratio clamps the effective ratio at zero")
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"GPT福利":0.01}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioAdjustmentByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"vip":{"GPT福利":0.007}}`))
+	legacyOverridePrice := priceFor()
+	assert.Equal(t, 0.007, legacyOverridePrice.GroupRatioInfo.GroupRatio, "existing fixed special ratios remain the fallback when no adjustment is set")
 }
 
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {

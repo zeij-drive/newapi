@@ -186,8 +186,6 @@ function validateConfig(array $config): array
         'gptstatus_state_file' => configValue($config, 'GPTSTATUS_STATE_FILE', 'gptstatus_state_file'),
         'gptstatus_cache_dir' => configValue($config, 'GPTSTATUS_CACHE_DIR', 'gptstatus_cache_dir'),
         'gptstatus_image_url' => rtrim(configValue($config, 'GPTSTATUS_IMAGE_URL', 'gptstatus_image_url'), '/'),
-        'ratio_state_file' => configValue($config, 'QQ_BOT_RATIO_GROUPS_FILE', 'qq_bot_ratio_groups_file'),
-        'ratio_admin_open_ids' => configValue($config, 'QQ_BOT_RATIO_ADMIN_OPEN_IDS', 'qq_bot_ratio_admin_open_ids'),
     ];
     if ($settings['app_id'] === '' || $settings['app_secret'] === '') {
         throw new RuntimeException('QQ_BOT_APP_ID and QQ_BOT_APP_SECRET are required');
@@ -213,9 +211,6 @@ function validateConfig(array $config): array
     }
     if ($settings['gptstatus_cache_dir'] === '') {
         $settings['gptstatus_cache_dir'] = sys_get_temp_dir() . '/starryapi-qqbot-gptstatus-' . hash('sha256', $settings['app_id']);
-    }
-    if ($settings['ratio_state_file'] === '') {
-        $settings['ratio_state_file'] = sys_get_temp_dir() . '/starryapi-qqbot-ratio-groups-' . hash('sha256', $settings['app_id']) . '.json';
     }
     if ($settings['gptstatus_state_file'] === '') {
         $settings['gptstatus_state_file'] = rtrim($settings['gptstatus_cache_dir'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'state.json';
@@ -743,209 +738,6 @@ function sendQQGroupImage(array $settings, string $groupID, string $messageID, s
     }
 }
 
-/** @param array<string, mixed> $settings */
-function sendQQGroupAnnouncement(array $settings, string $groupID, string $content): void
-{
-    $token = getQQAccessToken($settings);
-    $response = httpJsonRequest('POST', 'https://api.sgroup.qq.com/v2/groups/' . rawurlencode($groupID) . '/messages', [
-        'Authorization: QQBot ' . $token,
-        'X-Union-Appid: ' . $settings['app_id'],
-        'Content-Type: application/json',
-    ], [
-        'content' => $content,
-        'timestamp' => (int) round(microtime(true) * 1000),
-    ], 10);
-    if ($response['status'] < 200 || $response['status'] >= 300) {
-        throw new RuntimeException('QQ group announcement returned HTTP ' . $response['status']);
-    }
-}
-
-/** @param array<string, mixed> $settings
- *  @return list<string>
- */
-function loadRatioNotificationGroups(array $settings): array
-{
-    $path = $settings['ratio_state_file'];
-    gptstatusEnsureDirectory($path);
-    $handle = @fopen($path, 'c+');
-    if ($handle === false) {
-        throw new RuntimeException('could not open ratio notification state');
-    }
-    try {
-        if (!flock($handle, LOCK_SH)) {
-            throw new RuntimeException('could not lock ratio notification state');
-        }
-        rewind($handle);
-        $decoded = json_decode((string) stream_get_contents($handle), true);
-        if (!is_array($decoded)) {
-            return [];
-        }
-        $groups = [];
-        foreach ($decoded as $groupID) {
-            if (is_string($groupID) && $groupID !== '' && strlen($groupID) <= 128) {
-                $groups[$groupID] = true;
-            }
-        }
-        $result = array_keys($groups);
-        sort($result, SORT_STRING);
-        return $result;
-    } finally {
-        flock($handle, LOCK_UN);
-        fclose($handle);
-    }
-}
-
-/** @param array<string, mixed> $settings */
-function setRatioNotificationEnabled(array $settings, string $groupID, bool $enabled): void
-{
-    if ($groupID === '' || strlen($groupID) > 128) {
-        throw new RuntimeException('invalid QQ group identifier');
-    }
-    $path = $settings['ratio_state_file'];
-    gptstatusEnsureDirectory($path);
-    $handle = @fopen($path, 'c+');
-    if ($handle === false) {
-        throw new RuntimeException('could not open ratio notification state');
-    }
-    try {
-        if (!flock($handle, LOCK_EX)) {
-            throw new RuntimeException('could not lock ratio notification state');
-        }
-        rewind($handle);
-        $decoded = json_decode((string) stream_get_contents($handle), true);
-        $groups = [];
-        if (is_array($decoded)) {
-            foreach ($decoded as $existingGroupID) {
-                if (is_string($existingGroupID) && $existingGroupID !== '' && strlen($existingGroupID) <= 128) {
-                    $groups[$existingGroupID] = true;
-                }
-            }
-        }
-        if ($enabled) {
-            $groups[$groupID] = true;
-        } else {
-            unset($groups[$groupID]);
-        }
-        $groupIDs = array_keys($groups);
-        sort($groupIDs, SORT_STRING);
-        $encoded = json_encode($groupIDs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        ftruncate($handle, 0);
-        rewind($handle);
-        if (fwrite($handle, $encoded) !== strlen($encoded)) {
-            throw new RuntimeException('could not write ratio notification state');
-        }
-        fflush($handle);
-        @chmod($path, 0600);
-    } finally {
-        flock($handle, LOCK_UN);
-        fclose($handle);
-    }
-}
-
-/** @param array<string, mixed> $settings */
-function reserveRatioNotificationNonce(array $settings, string $nonce): bool
-{
-    $path = $settings['ratio_state_file'] . '.nonces';
-    gptstatusEnsureDirectory($path);
-    $handle = @fopen($path, 'c+');
-    if ($handle === false) {
-        throw new RuntimeException('could not open ratio notification replay cache');
-    }
-    try {
-        if (!flock($handle, LOCK_EX)) {
-            throw new RuntimeException('could not lock ratio notification replay cache');
-        }
-        rewind($handle);
-        $decoded = json_decode((string) stream_get_contents($handle), true);
-        $nonces = is_array($decoded) ? $decoded : [];
-        $now = time();
-        foreach ($nonces as $knownNonce => $expiresAt) {
-            if (!is_int($expiresAt) || $expiresAt <= $now) {
-                unset($nonces[$knownNonce]);
-            }
-        }
-        if (isset($nonces[$nonce]) || count($nonces) >= 8192) {
-            return false;
-        }
-        $nonces[$nonce] = $now + 600;
-        $encoded = json_encode($nonces, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        ftruncate($handle, 0);
-        rewind($handle);
-        if (fwrite($handle, $encoded) !== strlen($encoded)) {
-            throw new RuntimeException('could not write ratio notification replay cache');
-        }
-        fflush($handle);
-        @chmod($path, 0600);
-        return true;
-    } finally {
-        flock($handle, LOCK_UN);
-        fclose($handle);
-    }
-}
-
-/** @param array<string, mixed> $settings */
-function ratioNotificationIsAdmin(array $settings, string $openID): bool
-{
-    $admins = preg_split('/[,;\s]+/', trim((string) $settings['ratio_admin_open_ids']), -1, PREG_SPLIT_NO_EMPTY);
-    return is_array($admins) && in_array($openID, $admins, true);
-}
-
-/** @param array<string, mixed> $settings
- *  @return array{groups:list<string>,content:string}
- */
-function handleRatioNotificationCallback(array $settings, string $requestPath, string $body): array
-{
-    if (strlen($requestPath) > 512 || substr($requestPath, -strlen('/ratio-notification')) !== '/ratio-notification') {
-        throw new RuntimeException('invalid ratio notification path');
-    }
-    $timestamp = requestHeader('X-QQ-Bot-Timestamp');
-    $nonce = requestHeader('X-QQ-Bot-Nonce');
-    $provided = requestHeader('X-QQ-Bot-Signature');
-    if (!ctype_digit($timestamp) || strlen($timestamp) > 12 || abs(time() - (int) $timestamp) > 300
-        || strlen($nonce) !== 32 || !ctype_xdigit($nonce) || strtolower($nonce) !== $nonce
-        || strlen($provided) !== 64 || !ctype_xdigit($provided)) {
-        throw new RuntimeException('invalid ratio notification signature');
-    }
-    $expected = signInviteRequest($settings['bot_secret'], 'POST', $requestPath, $timestamp, $nonce, $body);
-    if (!hash_equals($expected, strtolower($provided))) {
-        throw new RuntimeException('invalid ratio notification signature');
-    }
-    if (!reserveRatioNotificationNonce($settings, $nonce)) {
-        throw new RuntimeException('duplicate ratio notification');
-    }
-    $payload = json_decode($body, true, 16, JSON_THROW_ON_ERROR);
-    $changes = $payload['groups'] ?? null;
-    if (!is_array($changes) || count($changes) < 1 || count($changes) > 100) {
-        throw new RuntimeException('invalid ratio notification payload');
-    }
-    $lines = ['@everyone 分组倍率变更通知'];
-    foreach ($changes as $change) {
-        if (!is_array($change) || !is_string($change['name'] ?? null) || trim($change['name']) === '' || strlen($change['name']) > 128 || preg_match('/[\r\n\x00]/', $change['name']) === 1
-            || !is_numeric($change['old_ratio'] ?? null) || !is_numeric($change['new_ratio'] ?? null)) {
-            throw new RuntimeException('invalid ratio notification payload');
-        }
-        $oldRatio = (float) $change['old_ratio'];
-        $newRatio = (float) $change['new_ratio'];
-        if (!is_finite($oldRatio) || !is_finite($newRatio) || $oldRatio < 0 || $newRatio < 0 || $oldRatio === $newRatio) {
-            throw new RuntimeException('invalid ratio notification payload');
-        }
-        $name = (string) $change['name'];
-        if (substr($name, -strlen('分组')) !== '分组') {
-            $name .= '分组';
-        }
-        $direction = $newRatio > $oldRatio ? '涨价' : '降价';
-        $lines[] = $name . $direction . '，' . formatRatioValue($oldRatio) . '->' . formatRatioValue($newRatio);
-    }
-    $content = implode("\n", $lines);
-    return ['groups' => loadRatioNotificationGroups($settings), 'content' => $content];
-}
-
-function formatRatioValue(float $ratio): string
-{
-    $formatted = json_encode($ratio, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
-    return preg_replace('/\.0$/', '', $formatted) . 'x';
-}
-
 /** @return array{0:string,1:bool} */
 function parseCommand(string $content): array
 {
@@ -965,9 +757,6 @@ function parseCommand(string $content): array
     }
     if ((string) $fields[1] === '邀请码') {
         return count($fields) === 3 ? ['invite', true] : ['invite_usage', true];
-    }
-    if ((string) $fields[1] === '倍率通知') {
-        return count($fields) === 3 ? ['ratio_notify', true] : ['ratio_notify_usage', true];
     }
     return ['unknown', true];
 }
@@ -1011,10 +800,7 @@ function groupCommandReply(string $content): ?string
     if ($command === 'invite_usage') {
         return '用法：/sapi 邀请码 邮箱';
     }
-    if ($command === 'ratio_notify_usage') {
-        return '用法：/sapi 倍率通知 开启|关闭';
-    }
-    return "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮件获取注册邀请码（每个 QQ 账号一个）\n/sapi 倍率通知 开启|关闭 - 开关本群倍率变更@全体通知\n/gptstatus - 群聊查询 GPT 状态图片";
+    return "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 邮件获取注册邀请码（每个 QQ 账号一个）\n/gptstatus - 群聊查询 GPT 状态图片";
 }
 
 /** @param array<string, mixed> $settings */
@@ -1155,9 +941,7 @@ function handleC2CMessage(array $settings, array $payload): bool
         ? '指令不存在'
         : ('invite_usage' === $command
             ? '用法：/sapi 邀请码 邮箱'
-            : (($command === 'ratio_notify' || $command === 'ratio_notify_usage')
-                ? '倍率通知命令仅限群聊使用。'
-                : "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 私聊或群聊@机器人获取邀请码（每个 QQ 账号一个，邮件发送）\n/sapi 倍率通知 开启|关闭 - 开关本群倍率变更@全体通知\n/gptstatus - 群聊查询 GPT 状态图片"));
+            : "StarryAPI bot\n/sapi - 显示帮助\n/sapi 邀请码 邮箱 - 私聊或群聊@机器人获取邀请码（每个 QQ 账号一个，邮件发送）\n/gptstatus - 群聊查询 GPT 状态图片");
     if ($command === 'invite') {
         $fields = preg_split('/\s+/u', trim($content), -1, PREG_SPLIT_NO_EMPTY);
         $email = is_array($fields) && isset($fields[2]) ? (string) $fields[2] : '';
@@ -1217,43 +1001,6 @@ function handleGroupMessage(array $settings, array $payload): bool
         }
     }
     [$command, $matched] = parseGroupCommand($content);
-    if ($matched && ($command === 'ratio_notify' || $command === 'ratio_notify_usage')) {
-        $reply = '用法：/sapi 倍率通知 开启|关闭';
-        if ($command === 'ratio_notify') {
-            if (!ratioNotificationIsAdmin($settings, $openID)) {
-                $reply = trim((string) $settings['ratio_admin_open_ids']) === ''
-                    ? '管理员尚未配置可管理倍率通知的 QQ 账号。'
-                    : '只有配置的群管理账号可以开关倍率通知。';
-            } else {
-                $fields = preg_split('/\s+/u', trim(stripQQGroupMentions($content)), -1, PREG_SPLIT_NO_EMPTY);
-                $action = is_array($fields) && isset($fields[2]) ? strtolower((string) $fields[2]) : '';
-                if (in_array($action, ['开启', '开', 'on'], true)) {
-                    try {
-                        setRatioNotificationEnabled($settings, $groupID, true);
-                        $reply = '本群倍率变更@全体通知已开启。';
-                    } catch (Throwable $error) {
-                        error_log('StarryAPI QQ bot ratio notification setting failed: ' . $error->getMessage());
-                        $reply = '倍率通知设置失败，请稍后重试。';
-                    }
-                } elseif (in_array($action, ['关闭', '关', 'off'], true)) {
-                    try {
-                        setRatioNotificationEnabled($settings, $groupID, false);
-                        $reply = '本群倍率变更@全体通知已关闭。';
-                    } catch (Throwable $error) {
-                        error_log('StarryAPI QQ bot ratio notification setting failed: ' . $error->getMessage());
-                        $reply = '倍率通知设置失败，请稍后重试。';
-                    }
-                }
-            }
-        }
-        try {
-            sendQQGroupReply($settings, $groupID, $messageID, $reply);
-        } catch (Throwable $error) {
-            error_log('StarryAPI QQ bot group message send failed: ' . $error->getMessage());
-            return false;
-        }
-        return true;
-    }
     if ($matched && ($command === 'invite' || $command === 'invite_usage')) {
         $reply = $command === 'invite'
             ? inviteEmailCommandReply($settings, $openID, stripQQGroupMentions($content))
@@ -1311,37 +1058,6 @@ function main(): void
     $body = file_get_contents('php://input', false, null, 0, STARRY_API_MAX_BODY_BYTES + 1);
     if ($body === false || $body === '' || strlen($body) > STARRY_API_MAX_BODY_BYTES) {
         respondText('invalid callback body', 400);
-    }
-    if (is_string($requestPath) && substr($requestPath, -strlen('/ratio-notification')) === '/ratio-notification') {
-        try {
-            $notification = handleRatioNotificationCallback($settings, $requestPath, $body);
-        } catch (Throwable $error) {
-            error_log('StarryAPI QQ bot ratio notification failed: ' . $error->getMessage());
-            $status = strpos($error->getMessage(), 'signature') !== false || strpos($error->getMessage(), 'duplicate') !== false
-                ? 401
-                : (strpos($error->getMessage(), 'payload') !== false || strpos($error->getMessage(), 'path') !== false ? 400 : 502);
-            respondJson(['success' => false], $status);
-        }
-        http_response_code(202);
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store');
-        echo '{"success":true}';
-        if (function_exists('fastcgi_finish_request')) {
-            fastcgi_finish_request();
-        } else {
-            if (function_exists('ob_get_level') && ob_get_level() > 0) {
-                @ob_end_flush();
-            }
-            flush();
-        }
-        foreach ($notification['groups'] as $groupID) {
-            try {
-                sendQQGroupAnnouncement($settings, $groupID, $notification['content']);
-            } catch (Throwable $error) {
-                error_log('StarryAPI QQ bot group-ratio announcement failed: ' . $error->getMessage());
-            }
-        }
-        exit;
     }
     if (!verifyQQSignature($settings['app_secret'], requestHeader('X-Signature-Timestamp'), requestHeader('X-Signature-Ed25519'), $body)) {
         respondText('invalid callback signature', 401);

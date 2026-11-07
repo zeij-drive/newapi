@@ -1,0 +1,11 @@
+name: astrbot_plugin_starryapi
+display_name: StarryAPI
+short_desc: StarryAPI QQ Bot 的 AstrBot 插件实现。
+desc: 提供 /sapi 邀请码和 /gptstatus 状态图片，兼容 NewAPI 的 HMAC 签名接口。
+author: StarryAPI
+version: 2.1.4
+repo: https://github.com/QuantumNous/new-api
+support_platforms:
+  - qq_official
+  - qq_official_webhook
+astrbot_version: ">=4.29,<5"

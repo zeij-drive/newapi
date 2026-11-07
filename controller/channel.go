@@ -886,6 +886,7 @@ func DeleteChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	probeCleanupErr := removeChannelStatusProbes([]int{id})
 	model.InitChannelCache()
 	if channelLookupFailed {
 		service.ResetProxyClientCache()
@@ -897,6 +898,10 @@ func DeleteChannel(c *gin.Context) {
 		"name": channelName,
 	})
 	closeActiveChannelWebSockets([]int{id})
+	if probeCleanupErr != nil {
+		common.ApiError(c, probeCleanupErr)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -917,6 +922,10 @@ func DeleteDisabledChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	var probeCleanupErr error
+	if rows > 0 {
+		probeCleanupErr = removeChannelStatusProbes(ids)
+	}
 	model.InitChannelCache()
 	if rows > 0 {
 		service.ResetProxyClientCache()
@@ -925,6 +934,10 @@ func DeleteDisabledChannel(c *gin.Context) {
 		"count": rows,
 	})
 	closeActiveChannelWebSockets(ids)
+	if probeCleanupErr != nil {
+		common.ApiError(c, probeCleanupErr)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1084,6 +1097,7 @@ func DeleteChannelBatch(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	probeCleanupErr := removeChannelStatusProbes(channelBatch.Ids)
 	model.InitChannelCache()
 	if deletedCount > 0 {
 		service.ResetProxyClientCache()
@@ -1092,6 +1106,10 @@ func DeleteChannelBatch(c *gin.Context) {
 		"count": deletedCount,
 	})
 	closeActiveChannelWebSockets(channelBatch.Ids)
+	if probeCleanupErr != nil {
+		common.ApiError(c, probeCleanupErr)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

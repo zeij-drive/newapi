@@ -161,6 +161,55 @@ func readChannelStatusState() (channelStatusProbeConfig, map[string]channelStatu
 	return config, observations, nil
 }
 
+func removeChannelStatusProbes(channelIDs []int) error {
+	deletedChannelIDs := make(map[int]struct{}, len(channelIDs))
+	for _, channelID := range channelIDs {
+		if channelID > 0 {
+			deletedChannelIDs[channelID] = struct{}{}
+		}
+	}
+	if len(deletedChannelIDs) == 0 {
+		return nil
+	}
+
+	channelStatusResultsMu.Lock()
+	defer channelStatusResultsMu.Unlock()
+
+	config, observations, err := readChannelStatusState()
+	if err != nil {
+		return err
+	}
+	probes := make([]channelStatusProbe, 0, len(config.Probes))
+	for _, probe := range config.Probes {
+		if _, deleted := deletedChannelIDs[probe.ChannelID]; !deleted {
+			probes = append(probes, probe)
+		}
+	}
+	retainedObservations := make(map[string]channelStatusObservation, len(probes))
+	for _, probe := range probes {
+		if observation, exists := observations[probe.ID]; exists && observation.Probe == probe {
+			retainedObservations[probe.ID] = observation
+		}
+	}
+	if len(probes) == len(config.Probes) && len(retainedObservations) == len(observations) {
+		return nil
+	}
+
+	config.Probes = probes
+	configData, err := common.Marshal(config)
+	if err != nil {
+		return err
+	}
+	resultsData, err := common.Marshal(retainedObservations)
+	if err != nil {
+		return err
+	}
+	return model.UpdateOptionsBulk(map[string]string{
+		channelStatusConfigOption:  string(configData),
+		channelStatusResultsOption: string(resultsData),
+	})
+}
+
 func validateChannelStatusProbeConfig(config *channelStatusProbeConfig, assignIDs bool) error {
 	if len(config.Probes) > 64 {
 		return errors.New("最多配置 64 个探针")

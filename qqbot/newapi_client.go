@@ -24,16 +24,14 @@ const registrationInvitePath = "/api/bot/registration-invite"
 var errInviteEmailRateLimited = errors.New("invite email rate limited")
 
 type config struct {
-	appID             string
-	appSecret         string
-	apiBaseURL        string
-	apiSecret         string
-	listenAddr        string
-	webhookPath       string
-	tlsCertFile       string
-	tlsKeyFile        string
-	ratioGroupsFile   string
-	ratioAdminOpenIDs []string
+	appID       string
+	appSecret   string
+	apiBaseURL  string
+	apiSecret   string
+	listenAddr  string
+	webhookPath string
+	tlsCertFile string
+	tlsKeyFile  string
 }
 
 type newAPIInviteClient struct {
