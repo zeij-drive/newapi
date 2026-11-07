@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -476,9 +477,31 @@ func UpdateChannelStatusProbes(c *gin.Context) {
 	}
 	channelStatusResultsMu.Lock()
 	defer channelStatusResultsMu.Unlock()
+	previousConfig, observations, err := readChannelStatusState()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	previousProbes := make(map[string]channelStatusProbe, len(previousConfig.Probes))
+	for _, previousProbe := range previousConfig.Probes {
+		previousProbes[previousProbe.ID] = previousProbe
+	}
+	validProbes := make([]channelStatusProbe, 0, len(config.Probes))
 	for _, probe := range config.Probes {
 		channel, err := model.GetChannelById(probe.ChannelID, false)
 		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				common.ApiError(c, err)
+				return
+			}
+			previousProbe, existed := previousProbes[probe.ID]
+			if existed && previousProbe.ChannelID == probe.ChannelID {
+				// A channel can be deleted outside the probe settings page. The
+				// next save submits the stale row along with the user's change;
+				// discard that row and its observation instead of blocking the
+				// deletion of another probe.
+				continue
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "探针渠道不存在"})
 			return
 		}
@@ -486,12 +509,9 @@ func UpdateChannelStatusProbes(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "探针模型不属于所选渠道"})
 			return
 		}
+		validProbes = append(validProbes, probe)
 	}
-	_, observations, err := readChannelStatusState()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	config.Probes = validProbes
 	retained := map[string]channelStatusObservation{}
 	for _, probe := range config.Probes {
 		if observation, exists := observations[probe.ID]; exists && observation.Probe == probe {

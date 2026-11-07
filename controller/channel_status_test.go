@@ -322,6 +322,71 @@ func TestChannelStatusDatabaseMatrix(t *testing.T) {
 	}
 }
 
+func TestUpdateChannelStatusProbesRemovesDeletedChannelRows(t *testing.T) {
+	for _, database := range []struct{ kind, dsn string }{
+		{"sqlite", ""},
+		{"mysql", os.Getenv("TEST_MYSQL_DSN")},
+		{"postgres", os.Getenv("TEST_POSTGRES_DSN")},
+	} {
+		t.Run(database.kind, func(t *testing.T) {
+			if database.kind != "sqlite" && database.dsn == "" {
+				t.Skip("set TEST_MYSQL_DSN and TEST_POSTGRES_DSN to run the real database matrix")
+			}
+			db := channelStatusTestDB(t, database.kind, database.dsn)
+			channel := model.Channel{
+				Name: "probe target", Key: "probe-target-key", Models: "gpt-4o-mini",
+				Group: "default", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled,
+			}
+			require.NoError(t, db.Create(&channel).Error)
+			validProbe := channelStatusProbe{
+				ID: "valid-probe", Name: "valid", ChannelID: channel.Id,
+				Model: "gpt-4o-mini", TimeoutSeconds: 5, Enabled: true,
+			}
+			staleProbe := channelStatusProbe{
+				ID: "stale-probe", Name: "stale", ChannelID: 987654321,
+				Model: "gpt-4o-mini", TimeoutSeconds: 5, Enabled: true,
+			}
+			seededConfig := channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{validProbe, staleProbe}}
+			configData, err := common.Marshal(seededConfig)
+			require.NoError(t, err)
+			resultsData, err := common.Marshal(map[string]channelStatusObservation{
+				validProbe.ID: {Probe: validProbe, Result: channelStatusProbeResult{ProbeID: validProbe.ID, Status: channelStatusOperational}},
+				staleProbe.ID: {Probe: staleProbe, Result: channelStatusProbeResult{ProbeID: staleProbe.ID, Status: channelStatusUnknown}},
+			})
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateOptionsBulk(map[string]string{
+				channelStatusConfigOption:  string(configData),
+				channelStatusResultsOption: string(resultsData),
+			}))
+
+			// The settings page submits all remaining rows when the valid probe is
+			// deleted. The stale row must be discarded automatically.
+			request := channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{staleProbe}}
+			var response struct {
+				Success bool `json:"success"`
+				Data    struct {
+					Config channelStatusProbeConfig `json:"config"`
+				} `json:"data"`
+			}
+			recorder := modelManagementRequest(t, UpdateChannelStatusProbes, http.MethodPut, "/api/channel/status/probes/", request, &response)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			require.True(t, response.Success, recorder.Body.String())
+			require.Empty(t, response.Data.Config.Probes)
+			cleanedConfig, cleanedResults, err := readChannelStatusState()
+			require.NoError(t, err)
+			assert.Empty(t, cleanedConfig.Probes)
+			assert.Empty(t, cleanedResults)
+
+			// A newly introduced invalid channel is still rejected.
+			newStaleProbe := staleProbe
+			newStaleProbe.ID = "new-stale-probe"
+			recorder = modelManagementRequest(t, UpdateChannelStatusProbes, http.MethodPut, "/api/channel/status/probes/", channelStatusProbeConfig{Enabled: true, Probes: []channelStatusProbe{newStaleProbe}}, nil)
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "探针渠道不存在")
+		})
+	}
+}
+
 func verifyChannelStatusIndependentProbes(t *testing.T, db *gorm.DB, userID int) {
 	t.Helper()
 	responseBody := `{"id":"independent-probe","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`
